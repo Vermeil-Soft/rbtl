@@ -1,0 +1,17 @@
+[package]
+name = "rbtl-rudp"
+version = "0.1.0"
+edition = "2024"
+
+[target.'cfg(windows)'.dependencies]
+windows = {version = ">=0.48", features = ["Win32_Networking_WinSock", "Win32_Foundation", "Win32_System_IO"]}
+
+[dependencies]
+hashbrown = "0.16"
+crc32fast = "1"
+log = "0.4"
+byteorder = "^1"
+x25519-dalek = { version = "^2", default-features = false, features = ["alloc", "getrandom"] }
+chacha20poly1305 = { version = "^0.10", default-features = false, features = ["alloc"] }
+
+rbtl-core = { path = "../rbtl-core" }

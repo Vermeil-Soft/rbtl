@@ -2,5 +2,12 @@
 name = "rbtl"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.90"
+
+[workspace]
+members = ["rbtl-core",
+    "rbtl-rudp",
+    "rbtl-tcp"
+]
 
 [dependencies]
