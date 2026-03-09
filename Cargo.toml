@@ -5,9 +5,11 @@ edition = "2024"
 rust-version = "1.90"
 
 [workspace]
-members = ["rbtl-core",
+members = [
+    "rbtl-core",
     "rbtl-rudp",
     "rbtl-tcp"
 ]
 
 [dependencies]
+"rbtl-rudp" = { path = "./rbtl-rudp" }

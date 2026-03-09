@@ -237,6 +237,9 @@ dependencies = [
 [[package]]
 name = "rbtl"
 version = "0.1.0"
+dependencies = [
+ "rbtl-rudp",
+]
 
 [[package]]
 name = "rbtl-core"
@@ -259,6 +262,10 @@ dependencies = [
 [[package]]
 name = "rbtl-tcp"
 version = "0.1.0"
+dependencies = [
+ "byteorder",
+ "rbtl-core",
+]
 
 [[package]]
 name = "rustc_version"
