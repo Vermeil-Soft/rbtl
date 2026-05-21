@@ -10,6 +10,8 @@ pub enum PacketSendError {
     NoEncryptionKey,
     /// Some unknown encryption error happened. Basically should never happen.
     EncryptionError,
+    /// The remote doesn't exist or has disconnected
+    RemoteNotConnected,
 }
 
 impl std::error::Error for PacketSendError {
@@ -27,6 +29,9 @@ impl std::fmt::Display for PacketSendError {
             },
             Self::NoEncryptionKey => {
                 write!(f, "The message was supposed to be encrypted, but we haven't got a shared secret yet")
+            },
+            Self::RemoteNotConnected => {
+                write!(f, "Remote not connected")
             },
             Self::EncryptionError => {
                 write!(f, "encryption error")

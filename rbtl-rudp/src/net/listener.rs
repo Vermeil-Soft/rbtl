@@ -9,7 +9,7 @@ use hashbrown::{HashMap, hash_map::Entry};
 use std::ops::{Index, IndexMut};
 
 use crate::net::socket::{SocketCreateError};
-use crate::{PacketSendOptions, SocketEvent, SocketShared};
+use crate::{PacketSendOptions, SeqId, SocketEvent, SocketShared};
 use crate::net::common::{ListenerConfig, SocketConfig, PacketSendError};
 use crate::net::protocol::packet::{UdpBytes};
 
@@ -17,10 +17,16 @@ use crate::net::protocol::packet::{UdpBytes};
 ///
 /// To ease use with potential STUN servers, connections are not obtained with a SocketAddr, but instead a custom
 /// SocketIdentity, holding the first 4 bytes of the public key of the remote
-#[derive(Hash, Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Hash, Clone, Copy, Eq, PartialEq)]
 pub struct SocketIdentity {
     /// first 4 bytes of a remote's public key.
     pub (crate) public_key: [u8; 4],
+}
+
+impl std::fmt::Debug for SocketIdentity {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "SocketIdentity({})", self)
+    }
 }
 
 impl SocketIdentity {
@@ -111,7 +117,7 @@ impl Listener {
         match self.remotes.entry(identity) {
             Entry::Occupied(mut o) => {
                 let socket = o.get_mut();
-                if remote_addr != socket.socket.remote_addr {
+                if remote_addr == socket.socket.remote_addr {
                     // ensure that the address we know from this pub_id is the same we just got the message from
                     socket.add_packet(packet);
                 }
@@ -162,6 +168,14 @@ impl Listener {
             };
         };
         Ok(())
+    }
+
+    /// Send some data to a single remote
+    pub fn send_data_to<I: Into<Arc<[u8]>> + AsRef<[u8]> + Clone>(&mut self, data: I, identity: SocketIdentity, options: PacketSendOptions) -> Result<SeqId, PacketSendError> {
+        match self.remotes.get_mut(&identity) {
+            Some(r) => r.send_data(data, options),
+            None => Err(PacketSendError::RemoteNotConnected)
+        }
     }
 
     /// Send some data to ALL remotes
