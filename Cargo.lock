@@ -239,6 +239,7 @@ name = "rbtl"
 version = "0.1.0"
 dependencies = [
  "rbtl-rudp",
+ "rbtl-tcp",
 ]
 
 [[package]]

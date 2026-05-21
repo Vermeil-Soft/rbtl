@@ -1,5 +1,6 @@
 
 pub use rbtl_rudp;
+pub use rbtl_tcp;
 
 pub mod prelude;
 mod socket;
