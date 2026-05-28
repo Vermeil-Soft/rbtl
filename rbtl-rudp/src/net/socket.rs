@@ -270,8 +270,8 @@ impl<K: SocketKind> SocketCommon<K> {
     }
 
     /// Simply update the internal "now" to "Instant::now()"
-    pub (crate) fn update_cached_now(&mut self) {
-        self.cached_now = Instant::now();
+    pub (crate) fn update_cached_now(&mut self, now: Option<Instant>) {
+        self.cached_now = now.unwrap_or_else(|| Instant::now());
     }
 
     pub (crate) fn inner_tick(&mut self) -> IoResult<()> {
@@ -432,7 +432,7 @@ impl SocketCommon<SocketKindUnique> {
     /// Must be done before draining events. Even if there are no events,
     /// you will want to re-send acks, keep track of sent data, etc. `next_tick` does that for you.
     pub fn process(&mut self) -> IoResult<()> {
-        self.update_cached_now();
+        self.update_cached_now(None);
         let mut done = false;
 
         // receive incoming packets and put them in a queue for processing

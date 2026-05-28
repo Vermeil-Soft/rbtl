@@ -7,7 +7,7 @@ edition = "2024"
 windows = {version = ">=0.48", features = ["Win32_Networking_WinSock", "Win32_Foundation", "Win32_System_IO"]}
 
 [dependencies]
-hashbrown = "0.16"
+hashbrown = ">=0.9, <1"
 crc32fast = "1"
 log = "0.4"
 byteorder = "^1"

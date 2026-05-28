@@ -1,6 +1,5 @@
 use std::net::{SocketAddr, UdpSocket, ToSocketAddrs};
 use std::io::{ErrorKind as IoErrorKind, Result as IoResult};
-use std::path::Display;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -215,8 +214,9 @@ impl Listener {
         self.remotes.retain(|_, v| {
             ! v.should_clear()
         });
+        let now = std::time::Instant::now();
         for socket in self.remotes.values_mut() {
-            socket.update_cached_now();
+            socket.update_cached_now(Some(now));
         }
         self.process_all_incoming()?;
         for socket in self.remotes.values_mut() {

@@ -24,4 +24,7 @@ mod listener;
 
 pub type SeqId = u32;
 
-pub use crate::socket::{Socket, SocketStatus};
+pub use crate::{
+    socket::{Socket, SocketEvent, SocketStatus},
+    listener::Listener
+};

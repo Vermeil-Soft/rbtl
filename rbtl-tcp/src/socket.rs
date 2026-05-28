@@ -36,13 +36,17 @@ pub enum SocketStatus {
 }
 
 impl SocketStatus {
-    fn is_error(&self) -> bool {
+    pub fn is_error(&self) -> bool {
         matches!(self, SocketStatus::Error(_))
+    }
+
+    pub fn is_normal(&self) -> bool {
+        matches!(self, SocketStatus::Normal)
     }
 }
 
 pub struct Socket {
-    stream: TcpStream,
+    tcp_stream: TcpStream,
     ingester: Ingester,
     out_seq_id: SeqId,
     last_ok_seq_id: Option<SeqId>,
@@ -59,13 +63,15 @@ pub (crate) const MSG_TYPE_DATA_HEAD_LEN: usize = 8;
 pub (crate) const MSG_TYPE_STATUS_HEAD_LEN: usize = 4;
 
 impl Socket {
+    pub (crate) fn prepare_tcp_stream(tcp_stream: &TcpStream) {
+        let _r = tcp_stream.set_nodelay(true);
+        let _r = tcp_stream.set_nonblocking(true);
+    }
 
-    pub fn new<A: ToSocketAddrs>(remote_addr: A) -> Result<Self, IoError> {
-        let socket = TcpStream::connect(remote_addr)?;
-        let _r = socket.set_nodelay(true);
-        let _r = socket.set_nonblocking(true);
-        Ok(Self {
-            stream: socket,
+    pub fn new_from_tcp_stream(tcp_stream: TcpStream) -> Self {
+        Self::prepare_tcp_stream(&tcp_stream);
+        Self {
+            tcp_stream,
             out_seq_id: 0,
             last_ok_seq_id: None,
             ping_tracker: PingTracker::new(),
@@ -74,7 +80,13 @@ impl Socket {
             status: SocketStatus::Normal,
 
             events: Vec::new(),
-        })
+        }
+    }
+
+    /// Connect to the remote. This call will block until the connection is made or dropped.
+    pub fn new<A: ToSocketAddrs>(remote_addr: A) -> Result<Self, IoError> {
+        let tcp_stream = TcpStream::connect(remote_addr)?;
+        Ok(Self::new_from_tcp_stream(tcp_stream))
     }
 
     /// Receives a single call of tcp socket read and stores it in the ingester
@@ -83,7 +95,7 @@ impl Socket {
             return Ok(());
         }
         let mut buf = [0; 2048];
-        let size = self.stream.read(&mut buf)?;
+        let size = self.tcp_stream.read(&mut buf)?;
         self.ingester.take_bytes(&buf[0..size], self.config.max_msg_len);
         Ok(())
     }
@@ -103,16 +115,12 @@ impl Socket {
         }
     }
 
-    /// Needed for borrow checker purposes
+    /// Omit of &mut self is needed for borrow checker purposes
     fn stream_send_status(stream: &mut TcpStream, seq_id: u32) {
         let mut out_bytes = vec![0u8; 5];
         out_bytes[0] = MSG_TYPE_STATUS_ID;
         BigEndian::write_u32(&mut out_bytes[1..5], seq_id);
         let _r = stream.write(&out_bytes);
-    }
-
-    fn internal_send_status(&mut self, seq_id: u32) {
-        Self::stream_send_status(&mut self.stream, seq_id);
     }
 
     fn internal_send_data(&mut self, seq_id: u32, bytes: &[u8]) {
@@ -121,7 +129,7 @@ impl Socket {
         BigEndian::write_u32(&mut out_bytes[1..5], seq_id);
         BigEndian::write_u32(&mut out_bytes[5..9], bytes.len() as u32);
         out_bytes[9..].copy_from_slice(bytes);
-        let _r = self.stream.write(&out_bytes);
+        let _r = self.tcp_stream.write(&out_bytes);
     }
 
     fn set_status(&mut self, status: SocketStatus) {
@@ -134,7 +142,7 @@ impl Socket {
             match ingester_result {
                 IngesterResult::Data(seq_id, data) => {
                     self.events.push(SocketEvent::Data(data));
-                    Self::stream_send_status(&mut self.stream, seq_id);
+                    Self::stream_send_status(&mut self.tcp_stream, seq_id);
                 },
                 IngesterResult::Error(err_msg) => {
                     let new_status = SocketStatus::Error(err_msg);
@@ -177,6 +185,14 @@ impl Socket {
         self.out_seq_id = self.out_seq_id.wrapping_add(1);
         self.internal_send_data(seq_id, bytes.as_ref());
         Ok(seq_id)
+    }
+
+    pub fn status(&self) -> SocketStatus {
+        self.status.clone()
+    }
+
+    pub fn drain_events<'a>(&'a mut self) -> impl 'a + Iterator<Item=SocketEvent> {
+        self.events.drain(..)
     }
 
     pub fn is_seq_id_received(&self, seq_id: SeqId) -> bool {

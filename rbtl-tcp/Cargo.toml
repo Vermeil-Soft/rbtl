@@ -5,4 +5,5 @@ edition = "2024"
 
 [dependencies]
 rbtl-core = { path = "../rbtl-core" }
+hashbrown = ">=0.9, <1"
 byteorder = "^1"
