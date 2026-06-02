@@ -3,13 +3,14 @@ use byteorder::{BigEndian, ByteOrder};
 
 use std::{
     io::{Error as IoError, ErrorKind as IoErrorKind, Read, Write},
-    net::{SocketAddr, TcpStream, ToSocketAddrs}
+    net::{SocketAddr, TcpStream, ToSocketAddrs}, time::Instant
 };
 
 use crate::{SeqId, ingester::{Ingester, IngesterResult}, ping_tracker::PingTracker};
 
-struct SocketConfig {
-    max_msg_len: u32
+#[derive(Clone)]
+pub struct SocketConfig {
+    pub max_msg_len: u32
 }
 
 impl SocketConfig {
@@ -23,16 +24,26 @@ impl SocketConfig {
 }
 
 pub enum SocketEvent {
-    Data(Vec<u8>),
+    Data(Box<[u8]>),
     Status(SocketStatus),
 }
 
-#[derive(Clone)]
+impl std::fmt::Debug for SocketEvent {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            SocketEvent::Data(d) => write!(f, "Data({:?} bytes)", d.len()),
+            SocketEvent::Status(s) => write!(f, "NewStatus({:?})", s),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
 pub enum SocketStatus {
-    Normal,
+    Connected,
     Error(String),
     Timeout,
-    Ended,
+    LocalEnded,
+    RemoteEnded,
 }
 
 impl SocketStatus {
@@ -40,8 +51,8 @@ impl SocketStatus {
         matches!(self, SocketStatus::Error(_))
     }
 
-    pub fn is_normal(&self) -> bool {
-        matches!(self, SocketStatus::Normal)
+    pub fn is_connected(&self) -> bool {
+        matches!(self, SocketStatus::Connected)
     }
 }
 
@@ -51,7 +62,7 @@ pub struct Socket {
     out_seq_id: SeqId,
     last_ok_seq_id: Option<SeqId>,
     ping_tracker: PingTracker,
-    config: SocketConfig,
+    pub (crate) config: SocketConfig,
     status: SocketStatus,
 
     events: Vec<SocketEvent>,
@@ -77,7 +88,7 @@ impl Socket {
             ping_tracker: PingTracker::new(),
             config: SocketConfig::new(),
             ingester: Ingester::new(),
-            status: SocketStatus::Normal,
+            status: SocketStatus::Connected,
 
             events: Vec::new(),
         }
@@ -91,11 +102,14 @@ impl Socket {
 
     /// Receives a single call of tcp socket read and stores it in the ingester
     fn recv_single(&mut self) -> Result<(), IoError> {
-        if self.status.is_error() {
+        if !self.status.is_connected() {
             return Ok(());
         }
         let mut buf = [0; 2048];
         let size = self.tcp_stream.read(&mut buf)?;
+        if size == 0 {
+            return Err(IoError::new(IoErrorKind::ConnectionReset, "end of stream"));
+        }
         self.ingester.take_bytes(&buf[0..size], self.config.max_msg_len);
         Ok(())
     }
@@ -130,6 +144,7 @@ impl Socket {
         BigEndian::write_u32(&mut out_bytes[5..9], bytes.len() as u32);
         out_bytes[9..].copy_from_slice(bytes);
         let _r = self.tcp_stream.write(&out_bytes);
+        self.ping_tracker.ping(seq_id);
     }
 
     fn set_status(&mut self, status: SocketStatus) {
@@ -137,11 +152,19 @@ impl Socket {
         self.status = status;
     }
 
+    pub (crate) fn insert_event(&mut self, socket_event: SocketEvent) {
+        self.events.push(socket_event);
+    }
+
+    pub (crate) fn has_events(&self) -> bool {
+        !self.events.is_empty()
+    }
+
     fn process_ingester_results(&mut self) {
         for ingester_result in self.ingester.results.drain(..) {
             match ingester_result {
                 IngesterResult::Data(seq_id, data) => {
-                    self.events.push(SocketEvent::Data(data));
+                    self.events.push(SocketEvent::Data(data.into_boxed_slice()));
                     Self::stream_send_status(&mut self.tcp_stream, seq_id);
                 },
                 IngesterResult::Error(err_msg) => {
@@ -167,10 +190,10 @@ impl Socket {
                         self.set_status(SocketStatus::Timeout);
                     },
                     IoErrorKind::ConnectionAborted | IoErrorKind::ConnectionReset => {
-                        self.set_status(SocketStatus::Ended);
+                        self.set_status(SocketStatus::RemoteEnded);
                     },
                     IoErrorKind::UnexpectedEof => {
-                        self.set_status(SocketStatus::Ended);
+                        self.set_status(SocketStatus::RemoteEnded);
                     },
                     _ => {
                         self.set_status(SocketStatus::Error(format!("unexpected IO error {}", io_error.to_string())));
@@ -180,11 +203,32 @@ impl Socket {
         }
     }
 
-    pub fn send<B>(&mut self, bytes: B) -> Result<SeqId, ()> where B: AsRef<[u8]> + Clone {
+    /// Returns the ping to the remote as ms
+    /// 
+    /// `seconds` is the duration over which to compute the average, 1.0 means compute the avg ping over the last second
+    ///
+    /// Returns None if the ping has not been computed yet
+    ///
+    /// If seconds is zero or negative or not enoguh to have a ping recorded,
+    /// it will simply retrun the latest ping if there is one
+    pub fn avg_ping(&self, seconds: f32) -> Option<f32> {
+        self.ping_tracker.avg_ping(seconds)
+    }
+
+    /// Returns the last ping available, and when it was received in time.
+    pub fn last_ping_info(&self) -> Option<(u32, Instant)> {
+        self.ping_tracker.last_ping_info()
+    }
+
+    pub fn end(&mut self) {
+        self.set_status(SocketStatus::LocalEnded);
+    }
+
+    pub fn send_data<B>(&mut self, bytes: B) -> SeqId where B: AsRef<[u8]> {
         let seq_id = self.out_seq_id;
         self.out_seq_id = self.out_seq_id.wrapping_add(1);
         self.internal_send_data(seq_id, bytes.as_ref());
-        Ok(seq_id)
+        seq_id
     }
 
     pub fn status(&self) -> SocketStatus {

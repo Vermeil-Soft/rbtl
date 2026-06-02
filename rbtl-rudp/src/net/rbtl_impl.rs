@@ -61,7 +61,8 @@ impl Client for Socket {
         self.drain_events().filter_map(map_event)
     }
 
-    fn new((socket_addr, udp_socket): Self::Init) -> Result<Self, Self::StateError> where Self: Sized {
+    fn new<I: Into<Self::Init>>(init: I) -> Result<Self, Self::StateError> where Self: Sized {
+        let (socket_addr, udp_socket) = init.into();
         let socket_addr = socket_addr.to_socket_addrs()?.next().unwrap();
         if let Some(socket) = udp_socket {
             Socket::connect_with_socket(socket, socket_addr)
@@ -134,7 +135,8 @@ impl Server for Listener {
         self.iter_mut()
     }
 
-    fn new(local_addr: Self::Init) -> Result<Self, Self::StateError> where Self: Sized {
+    fn new<I: Into<Self::Init>>(local_addr: I) -> Result<Self, Self::StateError> where Self: Sized {
+        let local_addr = local_addr.into();
         Self::new(&*local_addr)
     }
 

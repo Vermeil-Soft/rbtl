@@ -18,14 +18,10 @@ pub enum Status {
     Timeout,
     /// The connection was ended, by us or the remote.
     Ended { by_remote: bool },
-    // /// An error not related to the local, e.g. could not create a socket, could not access the network, ...
-    // /// 
-    // /// You must check `error()` to see the details of the error
-    // LocalError,
-    // /// An error related to the remote, but not a timeout: typically a crash
-    // /// 
-    // /// You must check `error()` to see the details of the error
-    // RemoteError,
+    /// An error that can be a protocol error, a network error, coming from us, the remote, ...
+    /// 
+    /// You must check `error()` to see the details of the error
+    Error,
 }
 
 pub trait Client {
@@ -36,7 +32,7 @@ pub trait Client {
     type StateError;
     type MessageId;
 
-    fn new(init: Self::Init) -> Result<Self, Self::StateError> where Self: Sized;
+    fn new<I: Into<Self::Init>>(init: I) -> Result<Self, Self::StateError> where Self: Sized;
 
     fn set_config(&mut self, config: Self::ClientConfig);
 
@@ -73,7 +69,7 @@ pub trait Server {
     type StateError;
     type MessageId;
 
-    fn new(init: Self::Init) -> Result<Self, Self::StateError> where Self: Sized;
+    fn new<I: Into<Self::Init>>(init: I) -> Result<Self, Self::StateError> where Self: Sized;
 
     fn set_config(&mut self, config: Self::ServerConfig);
 

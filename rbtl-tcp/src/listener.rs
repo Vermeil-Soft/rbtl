@@ -6,14 +6,15 @@ use std::{
 
 use hashbrown::{HashMap};
 
-use crate::{Socket, socket::SocketEvent};
+use crate::{SeqId, Socket, SocketStatus, socket::{SocketConfig, SocketEvent}};
 
-#[derive(Default)]
-struct ListenerConfig {
+#[derive(Default, Clone)]
+pub struct ListenerConfig {
 }
 
 pub struct Listener {
-    config: ListenerConfig,
+    pub (crate) listener_config: ListenerConfig,
+    pub (crate) socket_config: SocketConfig,
     tcp_listener: TcpListener,
     remotes: HashMap<SocketAddr, Socket>,
 }
@@ -24,7 +25,8 @@ impl Listener {
         let _r = tcp_listener.set_nonblocking(true);
         Ok(Listener {
             tcp_listener,
-            config: Default::default(),
+            listener_config: Default::default(),
+            socket_config: SocketConfig::new(),
             remotes: HashMap::default()
         })
     }
@@ -33,22 +35,39 @@ impl Listener {
         self.remotes.len()
     }
 
+    pub (crate) fn update_config_for_remotes(&mut self) {
+        for socket in self.remotes.values_mut() {
+            socket.config.clone_from(&self.socket_config);
+        }
+    }
+
+    /// Send some data to a single remote
+    pub fn send_data_to<I: AsRef<[u8]>>(&mut self, data: I, identity: SocketAddr) -> Result<SeqId, ()> {
+        match self.remotes.get_mut(&identity) {
+            Some(s) => Ok(s.send_data(data.as_ref())),
+            None => Err(())
+        }
+    }
+
+    /// Send some data to ALL remotes
+    pub fn send_data<I: AsRef<[u8]>>(&mut self, data: I) {
+        for socket in self.remotes.values_mut() {
+            socket.send_data(data.as_ref());
+        }
+    }
+
     fn process_all_incoming(&mut self) {
-        for stream in self.tcp_listener.incoming() {
-            if let Ok(stream) = stream {
-                if let Ok(peer_addr) = stream.peer_addr() {
-                    let socket = Socket::new_from_tcp_stream(stream);
-                    self.remotes.insert(peer_addr, socket);
-                }
-            } else {
-                // .incoming is a loop that never ends, instead we expect a WouldBlock to end the loop
-                break;
-            }
+        while let Ok((stream, peer_addr)) = self.tcp_listener.accept() {
+            let mut socket = Socket::new_from_tcp_stream(stream);
+            socket.config = self.socket_config.clone();
+            socket.insert_event(SocketEvent::Status(SocketStatus::Connected));
+            self.remotes.insert(peer_addr, socket);
         }
     }
 
     pub fn process(&mut self) -> Result<(), IoError> {
-        self.remotes.retain(|_, v| { v.status().is_normal() });
+        // if it's still connected, or if it's disconnected but still has events to process, retain the remote
+        self.remotes.retain(|_, v| v.status().is_connected() || v.has_events());
         self.process_all_incoming();
         for socket in self.remotes.values_mut() {
             socket.process();

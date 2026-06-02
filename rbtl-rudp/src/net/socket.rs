@@ -85,7 +85,7 @@ pub struct SocketCommon<K: SocketKind> {
 
     pub (crate) fragment_assembler: FragmentAssembler<BoxedSlice<u8>>,
     pub (crate) sent_data_tracker: SentDataTracker<Arc<[u8]>>,
-    pub (crate) ping_handler: PingTracker,
+    pub (crate) ping_tracker: PingTracker,
 
     /// events of this remote. Messages not from this remote are in `unknown_messages`
     pub (crate) events: VecDeque<SocketEvent>,
@@ -170,7 +170,7 @@ impl<K: SocketKind> SocketCommon<K> {
     /// Returns the sequence_id of the message sent. This may be useful to track whether or not the message has been received.
     pub fn send_data<I: Into<Arc<[u8]>> + AsRef<[u8]>>(&mut self, data: I, send_options: PacketSendOptions) -> Result<u32, PacketSendError> {
         if send_options.key {
-            self.ping_handler.ping(self.next_local_seq_id);
+            self.ping_tracker.ping(self.next_local_seq_id);
         }
         let seq_id = self.next_local_seq_id;
         self.next_local_seq_id += 1;
@@ -209,7 +209,7 @@ impl<K: SocketKind> SocketCommon<K> {
             },
             PacketVariant::Ack { seq_id, slice } => {
                 log::trace!("received ack({}) {:?}", seq_id, slice);
-                self.ping_handler.pong(seq_id);
+                self.ping_tracker.pong(seq_id);
                 self.sent_data_tracker.receive_ack(seq_id, slice, self.cached_now);
             },
             PacketVariant::Heartbeat => {
@@ -261,12 +261,12 @@ impl<K: SocketKind> SocketCommon<K> {
     ///
     /// If seconds is zero or negative, it will simply retrun the latest ping if there is one
     pub fn avg_ping(&self, seconds: f32) -> Option<f32> {
-        self.ping_handler.avg_ping(seconds)
+        self.ping_tracker.avg_ping(seconds)
     }
 
     /// Returns the last ping available, and when it was received in time.
     pub fn last_ping_info(&self) -> Option<(u32, Instant)> {
-        self.ping_handler.last_ping_info()
+        self.ping_tracker.last_ping_info()
     }
 
     /// Simply update the internal "now" to "Instant::now()"
@@ -361,7 +361,7 @@ impl SocketCommon<SocketKindShared> {
             sent_data_tracker: SentDataTracker::new(),
             events: Default::default(),
             next_local_seq_id: 0,
-            ping_handler: PingTracker::new(),
+            ping_tracker: PingTracker::new(),
             cached_now: now,
             last_received_message: now,
 
@@ -397,7 +397,7 @@ impl SocketCommon<SocketKindUnique> {
             sent_data_tracker: SentDataTracker::new(),
             fragment_assembler: FragmentAssembler::new(),
             events: Default::default(),
-            ping_handler: PingTracker::new(),
+            ping_tracker: PingTracker::new(),
             next_local_seq_id: 0,
             cached_now: now,
             last_received_message: now,

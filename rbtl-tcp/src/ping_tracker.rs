@@ -85,7 +85,7 @@ impl PingTracker {
             n += 1;
         }
         if n == 0 {
-            None
+            self.recorded_pings.get(0).map(|(p, _)| *p as f32)
         } else {
             Some(tot / n as f32)
         }
