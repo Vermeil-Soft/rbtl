@@ -6,7 +6,7 @@ use std::{
 
 use crate::{Listener, Socket, SocketEvent, SocketStatus, listener::ListenerConfig, socket::SocketConfig};
 
-use rbtl_core::{Client, Event, SClient, Server, Status};
+use rbtl_core::{Client, Event, ServClient, Server, Status};
 
 fn convert_status(socket_status: SocketStatus) -> Status {
     match socket_status {
@@ -45,7 +45,7 @@ impl From<TcpStream> for SocketInit {
 impl Client for Socket {
     type ClientConfig = ();
     type StateError = std::io::Error;
-    type SendError = ();
+    type SendError = std::io::Error;
     type Init = SocketInit;
     type MessageId = u32;
     type SendOptions = ();
@@ -77,18 +77,26 @@ impl Client for Socket {
         let _r = self.process();
     }
 
+    fn ping(&self, seconds: f32) -> Option<f32> {
+        self.avg_ping(seconds)
+    }
+
     fn send<B>(&mut self, bytes: B, _send_opts: Self::SendOptions) -> Result<Self::MessageId, Self::SendError>
             where B: Into<Arc<[u8]>> + AsRef<[u8]> + Clone {
         Ok(self.send_data(bytes))
     }
 }
 
-impl SClient for Socket {
+impl ServClient for Socket {
     type Server = Listener;
 
     fn send<B: Into<Arc<[u8]>> + AsRef<[u8]> + Clone>(&mut self, bytes: B, _send_opts: ()) 
             -> Result<<Self::Server as Server>::MessageId, <Self::Server as Server>::SendError> {
         Ok(self.send_data(bytes))
+    }
+
+    fn ping(&self, seconds: f32) -> Option<f32> {
+        self.avg_ping(seconds)
     }
 
     fn status(&self) -> Status {
@@ -97,13 +105,17 @@ impl SClient for Socket {
 }
 
 impl Server for Listener {
-    type Client = Socket;
+    const RBTL_ID: u8 = 2;
+
+    type ServClient = Socket;
     type Init = Box<dyn ToSocketAddrs<Iter = IntoIter<SocketAddr>>>;
     type Key = SocketAddr;
+    type ConnectingClient = Socket;
     type SendOptions = ();
-    type SendError = ();
+    type SendError = std::io::Error;
     type MessageId = u32;
     type ServerConfig = (SocketConfig, ListenerConfig);
+    type ConnectInfo = SocketAddr;
     type StateError = std::io::Error;
 
     fn drain_events<'a>(&'a mut self) -> impl Iterator<Item=(Self::Key, Event)> + 'a {
@@ -111,11 +123,11 @@ impl Server for Listener {
             .filter_map(|(id, ev)| map_event(ev).map(|ev| (id, ev)))
     }
 
-    fn get(&self, k: &Self::Key) -> Option<&Self::Client> {
+    fn get(&self, k: &Self::Key) -> Option<&Self::ServClient> {
         self.get(*k)
     }
 
-    fn get_mut(&mut self, k: &Self::Key) -> Option<&mut Self::Client> {
+    fn get_mut(&mut self, k: &Self::Key) -> Option<&mut Self::ServClient> {
         self.get_mut(*k)
     }
 
@@ -129,17 +141,29 @@ impl Server for Listener {
         self.update_config_for_remotes();
     }
 
-    fn iter(&self) -> impl Iterator<Item=(&Self::Key, &Self::Client)> {
+    fn iter(&self) -> impl Iterator<Item=(&Self::Key, &Self::ServClient)> {
         self.iter()
     }
 
-    fn iter_mut(&mut self) -> impl Iterator<Item=(&Self::Key, &mut Self::Client)> {
+    fn iter_mut(&mut self) -> impl Iterator<Item=(&Self::Key, &mut Self::ServClient)> {
         self.iter_mut()
     }
 
-    fn new<I: Into<Self::Init>>(init: I) -> Result<Self, Self::StateError> where Self: Sized {
+    fn len(&self) -> usize {
+        self.remotes_len()
+    }
+
+    fn connect_info(&self) -> Self::ConnectInfo {
+        self.tcp_listener.local_addr().expect("unable to get local addr")
+    }
+
+    fn new_with<I: Into<Self::Init>>(init: I) -> Result<Self, Self::StateError> where Self: Sized {
         let local_addr = init.into();
         Self::bind(&*local_addr)
+    }
+
+    fn new() -> Result<Self, Self::StateError> where Self: Sized {
+        Self::bind("0.0.0.0:0")
     }
 
     fn process(&mut self) {

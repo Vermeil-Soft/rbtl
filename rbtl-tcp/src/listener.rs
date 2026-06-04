@@ -15,7 +15,7 @@ pub struct ListenerConfig {
 pub struct Listener {
     pub (crate) listener_config: ListenerConfig,
     pub (crate) socket_config: SocketConfig,
-    tcp_listener: TcpListener,
+    pub (crate) tcp_listener: TcpListener,
     remotes: HashMap<SocketAddr, Socket>,
 }
 

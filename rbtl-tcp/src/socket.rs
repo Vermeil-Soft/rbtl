@@ -57,7 +57,7 @@ impl SocketStatus {
 }
 
 pub struct Socket {
-    tcp_stream: TcpStream,
+    pub (crate) tcp_stream: TcpStream,
     ingester: Ingester,
     out_seq_id: SeqId,
     last_ok_seq_id: Option<SeqId>,

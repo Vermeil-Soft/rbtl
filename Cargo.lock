@@ -183,6 +183,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c08d65885ee38876c4f86fa503fb49d7b507c2b62552df7c70b2fce627e06381"
 
 [[package]]
+name = "paste"
+version = "1.0.15"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "57c0d7b74b563b49d38dae00a0c37d4d6de9b432382b2892f0574ddcae73fd0a"
+
+[[package]]
 name = "poly1305"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -224,6 +230,8 @@ dependencies = [
 name = "rbtl"
 version = "0.1.0"
 dependencies = [
+ "paste",
+ "rbtl-core",
  "rbtl-rudp",
  "rbtl-tcp",
 ]
@@ -231,6 +239,9 @@ dependencies = [
 [[package]]
 name = "rbtl-core"
 version = "0.1.0"
+dependencies = [
+ "serde",
+]
 
 [[package]]
 name = "rbtl-rudp"

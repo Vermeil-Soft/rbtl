@@ -14,3 +14,6 @@ members = [
 [dependencies]
 rbtl-rudp = { path = "./rbtl-rudp" }
 rbtl-tcp = { path = "./rbtl-tcp" }
+rbtl-core = { path = "./rbtl-core" }
+
+paste = "^1.0"

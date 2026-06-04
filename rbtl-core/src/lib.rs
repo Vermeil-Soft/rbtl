@@ -1,6 +1,7 @@
 //! Trait used by the RBTL implementors
 
-use std::sync::Arc;
+use std::{error::Error, sync::Arc};
+pub use serde;
 
 pub enum Event {
     Data(Box<[u8]>),
@@ -29,7 +30,7 @@ pub trait Client {
     type Init;
     type SendOptions;
     type SendError;
-    type StateError;
+    type StateError: Error;
     type MessageId;
 
     fn new<I: Into<Self::Init>>(init: I) -> Result<Self, Self::StateError> where Self: Sized;
@@ -45,31 +46,51 @@ pub trait Client {
 
     // fn error(&self) -> Option<Self::StateError>;
 
+    /// Returns the average ping over the duration in milliseconds
+    fn ping(&self, seconds: f32) -> Option<f32>;
+
     fn process(&mut self);
 
     fn drain_events<'a>(&'a mut self) -> impl Iterator<Item=Event> + 'a;
 }
 
-pub trait SClient {
+pub trait ServClient {
     type Server: Server;
 
     fn send<B: Into<Arc<[u8]>> + AsRef<[u8]> + Clone>(&mut self, bytes: B, send_options: <Self::Server as Server>::SendOptions)
         -> Result<<Self::Server as Server>::MessageId, <Self::Server as Server>::SendError>;
 
+    /// Returns the average ping over the duration in milliseconds
+    fn ping(&self, seconds: f32) -> Option<f32>;
+
     fn status(&self) -> Status;
 }
 
 pub trait Server {
-    type Key;
+    /// RBTL_ID: must be unique for each implementation. As a guideline, "public" implementations start from 0,
+    /// while "private" ones go from 255 descending.
+    ///
+    /// Its purpose is to serialize/parse connection info, having an identifier that we know belongs to this impl
+    /// helps
+    const RBTL_ID: u8;
+
+    type Key: Clone;
     type Init;
     type ServerConfig;
-    type Client: SClient;
-    type SendOptions;
+    type ServClient: ServClient;
+    type ConnectingClient;
+    type SendOptions: Default;
     type SendError;
-    type StateError;
+    type StateError: Error;
+    // struct to indicate how to connect to this listener
+    type ConnectInfo: Clone + serde::Serialize;
     type MessageId;
 
-    fn new<I: Into<Self::Init>>(init: I) -> Result<Self, Self::StateError> where Self: Sized;
+    /// Create a server/listener with a custom init payload, such as the port to choose, etc
+    fn new_with<I: Into<Self::Init>>(init: I) -> Result<Self, Self::StateError> where Self: Sized;
+
+    /// Create a server/listener with sensible defaults
+    fn new() -> Result<Self, Self::StateError> where Self: Sized;
 
     fn set_config(&mut self, config: Self::ServerConfig);
 
@@ -78,13 +99,17 @@ pub trait Server {
     fn send_all<B>(&mut self, bytes: B, send_opts: Self::SendOptions) -> Result<(), Self::SendError>
         where B: Into<Arc<[u8]>> + AsRef<[u8]> + Clone;
 
-    fn get_mut(&mut self, k: &Self::Key) -> Option<&mut Self::Client>;
+    fn get_mut(&mut self, k: &Self::Key) -> Option<&mut Self::ServClient>;
 
-    fn get(&self, k: &Self::Key) -> Option<&Self::Client>;
+    fn get(&self, k: &Self::Key) -> Option<&Self::ServClient>;
 
-    fn iter(&self) -> impl Iterator<Item=(&Self::Key, &Self::Client)>;
+    fn iter(&self) -> impl Iterator<Item=(&Self::Key, &Self::ServClient)>;
 
-    fn iter_mut(&mut self) -> impl Iterator<Item=(&Self::Key, &mut Self::Client)>;
+    fn iter_mut(&mut self) -> impl Iterator<Item=(&Self::Key, &mut Self::ServClient)>;
+
+    fn connect_info(&self) -> Self::ConnectInfo;
+
+    fn len(&self) -> usize;
 
     fn process(&mut self);
 

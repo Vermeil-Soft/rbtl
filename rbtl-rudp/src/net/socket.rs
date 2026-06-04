@@ -259,7 +259,7 @@ impl<K: SocketKind> SocketCommon<K> {
     ///
     /// Returns None if the ping has not been computed yet
     ///
-    /// If seconds is zero or negative, it will simply retrun the latest ping if there is one
+    /// If seconds is zero or negative, it will simply return the latest ping if there is one
     pub fn avg_ping(&self, seconds: f32) -> Option<f32> {
         self.ping_tracker.avg_ping(seconds)
     }
