@@ -234,14 +234,12 @@ dependencies = [
  "rbtl-core",
  "rbtl-rudp",
  "rbtl-tcp",
+ "serde",
 ]
 
 [[package]]
 name = "rbtl-core"
 version = "0.1.0"
-dependencies = [
- "serde",
-]
 
 [[package]]
 name = "rbtl-rudp"

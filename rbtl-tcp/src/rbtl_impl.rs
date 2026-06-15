@@ -4,7 +4,10 @@ use std::{
     vec::IntoIter
 };
 
-use crate::{Listener, Socket, SocketEvent, SocketStatus, listener::ListenerConfig, socket::SocketConfig};
+use crate::{
+    Listener, Socket, SocketEvent, SocketStatus, ConnectInfo,
+    listener::ListenerConfig, socket::SocketConfig
+};
 
 use rbtl_core::{Client, Event, ServClient, Server, Status};
 
@@ -115,7 +118,7 @@ impl Server for Listener {
     type SendError = std::io::Error;
     type MessageId = u32;
     type ServerConfig = (SocketConfig, ListenerConfig);
-    type ConnectInfo = SocketAddr;
+    type ConnectInfo = ConnectInfo;
     type StateError = std::io::Error;
 
     fn drain_events<'a>(&'a mut self) -> impl Iterator<Item=(Self::Key, Event)> + 'a {
@@ -153,8 +156,11 @@ impl Server for Listener {
         self.remotes_len()
     }
 
-    fn connect_info(&self) -> Self::ConnectInfo {
-        self.tcp_listener.local_addr().expect("unable to get local addr")
+    fn connect_info(&self) -> Result<Self::ConnectInfo, ()> {
+        let local_addr = self.tcp_listener.local_addr().expect("unable to get local addr");
+        Ok(ConnectInfo {
+            addr: local_addr
+        })
     }
 
     fn new_with<I: Into<Self::Init>>(init: I) -> Result<Self, Self::StateError> where Self: Sized {

@@ -10,6 +10,7 @@ pub use crate::net::{
         Socket, SocketShared, SocketCommon, SocketEvent,
     },
     common::{PacketSendOptions, SeqId},
+    connect_info::ConnectInfo,
     inner::SocketStatus,
     listener::{Listener, SocketIdentity},
 };

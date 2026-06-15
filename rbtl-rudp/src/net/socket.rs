@@ -12,6 +12,7 @@ use x25519_dalek::{PublicKey, EphemeralSecret, SharedSecret};
 use crate::{
     PacketSendOptions, SocketIdentity,
     net::{
+        connect_info::ConnectInfo,
         common::{PacketSendError, SocketConfig, SeqId},
         inner::{SocketInner, SocketStatus},
         ping_tracker::PingTracker,
@@ -381,9 +382,7 @@ impl SocketCommon<SocketKindShared> {
 
 impl SocketCommon<SocketKindUnique> {
     /// See `connect`, but provide the UDP socket instead of creating it
-    pub fn connect_with_socket<A: ToSocketAddrs>(udp_socket: UdpSocket, remote_addr: A) -> IoResult<Socket> {
-        let remote_addr = remote_addr.to_socket_addrs()?.next().unwrap();
-
+    pub fn connect_with_socket(udp_socket: UdpSocket, remote_addr: SocketAddr) -> IoResult<Socket> {
         let udp_socket = Arc::new(udp_socket);
         crate::os::prepare_socket(&udp_socket);
         udp_socket.set_nonblocking(true)?;
@@ -424,7 +423,11 @@ impl SocketCommon<SocketKindUnique> {
     /// * The remote did not answer, and we will get a timeout
     // If you want to accept a new connection, use `new_incoming` instead.
     pub fn connect<A: ToSocketAddrs>(remote_addr: A) -> IoResult<Socket> {
-        Self::connect_with_socket(UdpSocket::bind("0.0.0.0:0")?, remote_addr)
+        Self::connect_with_socket(UdpSocket::bind("0.0.0.0:0")?, remote_addr.to_socket_addrs()?.next().unwrap())
+    }
+
+    pub fn from_connect_info(connect_info: ConnectInfo) -> IoResult<Socket> {
+        Self::connect_with_socket(UdpSocket::bind("0.0.0.0:0")?, connect_info.addr)
     }
 
     /// Internal processing for this single source

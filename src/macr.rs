@@ -1,5 +1,6 @@
-/// Creates and exports RBTL structs
-macro_rules! rbtl_structs {
+#[macro_export]
+/// Do not use, internal use only
+macro_rules! _rbtl_structs_impl {
     ( $([$name:ident, $struct:ty] $(,)* )* ) => {
         paste::paste! {
             pub struct RBTLListener {
@@ -10,8 +11,15 @@ macro_rules! rbtl_structs {
                 pub $( [<$name:snake>] : <$struct as $crate::Server>::SendOptions ,)*
             }
 
+            /// a ConnectInfo that can only be serialized
             pub struct RBTLConnectInfo {
-                pub $( [<$name:snake>] : <$struct as $crate::Server>::ConnectInfo ,)*
+                pub $( [<$name:snake>] : Result<<$struct as $crate::Server>::ConnectInfo, ()> ,)*
+            }
+
+            /// a ConnectInfoParsed that can only be deserialized, using the same payload as ConnectInfo's ser payload
+            pub struct RBTLConnectInfoParsed {
+                pub $( [<$name:snake>] : Option<<$struct as $crate::Server>::ConnectInfo> ,)*
+                pub unknown: Vec<(u8, Box<[u8]>)>,
             }
         }
 
@@ -156,6 +164,12 @@ macro_rules! rbtl_structs {
                     })
                 }
 
+                /// Returns the amount of adapters currently coded
+                pub fn adapters_len() -> usize {
+                    0
+                        $( + <$struct as $crate::rbtl_core::Server>::RBTL_ID as usize * 0 + 1 )*
+                }
+
                 /// Send a message to all remotes
                 pub fn send_all<B>(&mut self, bytes: B, send_options: RBTLSendOptions) -> Result<(), Box<dyn std::error::Error>>
                     where B: Into<std::sync::Arc<[u8]>> + AsRef<[u8]> + Clone 
@@ -231,6 +245,100 @@ macro_rules! rbtl_structs {
                     $( <$struct as $crate::Server>::process(&mut self.[<$name:snake>]); )*
                 }
             }
+        }
+    }
+}
+
+#[macro_export]
+#[cfg(feature = "serde")]
+/// Creates and exports RBTL structs (serde version)
+macro_rules! rbtl_structs {
+    ( $([$name:ident, $struct:ty] $(,)* )* ) => {
+        $crate::_rbtl_structs_impl! {
+            $([$name, $struct],)*
+        }
+
+        paste::paste! {
+            use $crate::serde::{Serialize, Deserialize, Serializer, Deserializer};
+            use $crate::serde::de::{MapAccess, Visitor};
+            use std::fmt;
+            use super::*;
+
+            impl Serialize for RBTLConnectInfo {
+                fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error> where S: Serializer {
+                    use serde::ser::SerializeMap;
+
+                    let mut n = 0;
+                    $( if self.[<$name:snake>].is_ok() { n += 1 }; )*
+
+                    let mut map = serializer.serialize_map(Some(n))?;
+
+                    $(
+                        let bytes: Option<Vec<u8>> = self.[<$name:snake>]
+                            .as_ref()
+                            .ok()
+                            .and_then(|r| r.clone().try_into().ok());
+                        if let Some(bytes) = bytes {
+                            map.serialize_entry(&<$struct as $crate::Server>::RBTL_ID, &bytes.into_boxed_slice())?
+                        }
+                    )*
+                    map.end()
+                }
+            }
+
+            impl<'de> Deserialize<'de> for RBTLConnectInfoParsed {
+                fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+                where
+                    D: Deserializer<'de>,
+                {
+                    struct ConnectInfoParsedVisitor;
+                    
+                    impl<'de> Visitor<'de> for ConnectInfoParsedVisitor {
+                        type Value = RBTLConnectInfoParsed;
+                        
+                        fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                            formatter.write_str("ConnectInfo")
+                        }
+                        
+                        fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+                        where
+                            A: MapAccess<'de>,
+                        {
+                            let mut unknown = Vec::new();
+                            $( let mut [<$name:snake>]: Option<<$struct as $crate::Server>::ConnectInfo> = None; )*
+                            
+                            while let Some((key, value)) = map.next_entry::<u8, Box<[u8]>>()? {
+                                let mut found = false;
+                                $(
+                                    if key == <$struct as $crate::Server>::RBTL_ID {
+                                        [<$name:snake>] = <$struct as $crate::Server>::ConnectInfo::try_from(&*value).ok();
+                                        found = true;
+                                    }
+                                )*
+                                if !found {
+                                    unknown.push((key, value));
+                                }
+                            }
+                            
+                            Ok(RBTLConnectInfoParsed { tcp, rudp, unknown })
+                        }
+                    }
+                    
+                    deserializer.deserialize_map(ConnectInfoParsedVisitor)
+                }
+            }
+        }
+    }
+}
+
+
+#[cfg(not(feature = "serde"))]
+#[macro_export]
+/// Creates and exports RBTL structs (non-serde version)
+macro_rules! rbtl_structs {
+    ( $([$name:ident, $struct:ty] $(,)* )* ) => {
+        $crate::_rbtl_structs_impl! {
+            $([$name, $struct],)*
         }
     }
 }

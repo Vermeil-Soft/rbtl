@@ -94,6 +94,10 @@ impl Socket {
         }
     }
 
+    pub fn raw(&self) -> &TcpStream {
+        &self.tcp_stream
+    }
+
     /// Connect to the remote. This call will block until the connection is made or dropped.
     pub fn new<A: ToSocketAddrs>(remote_addr: A) -> Result<Self, IoError> {
         let tcp_stream = TcpStream::connect(remote_addr)?;

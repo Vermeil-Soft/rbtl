@@ -1,7 +1,6 @@
 //! Trait used by the RBTL implementors
 
 use std::{error::Error, sync::Arc};
-pub use serde;
 
 pub enum Event {
     Data(Box<[u8]>),
@@ -83,7 +82,7 @@ pub trait Server {
     type SendError;
     type StateError: Error;
     // struct to indicate how to connect to this listener
-    type ConnectInfo: Clone + serde::Serialize;
+    type ConnectInfo: Clone + for <'a> TryFrom<&'a [u8]> + TryInto<Vec<u8>>;
     type MessageId;
 
     /// Create a server/listener with a custom init payload, such as the port to choose, etc
@@ -107,7 +106,8 @@ pub trait Server {
 
     fn iter_mut(&mut self) -> impl Iterator<Item=(&Self::Key, &mut Self::ServClient)>;
 
-    fn connect_info(&self) -> Self::ConnectInfo;
+    /// Returns the info of how to connect to this listener, or an error if the info is not available (yet or forever)
+    fn connect_info(&self) -> Result<Self::ConnectInfo, ()>;
 
     fn len(&self) -> usize;
 

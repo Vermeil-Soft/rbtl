@@ -8,6 +8,7 @@ use crate::{
     Listener, SocketEvent, Socket, SocketCommon, SocketStatus, SocketShared, SocketIdentity,
     net::{
         socket::SocketKind,
+        connect_info::ConnectInfo,
         common::{PacketSendError, PacketSendOptions, SocketConfig, ListenerConfig, SeqId},
     }
 };
@@ -112,7 +113,7 @@ impl Server for Listener {
     type SendOptions = PacketSendOptions;
     type SendError = PacketSendError;
     type MessageId = u32;
-    type ConnectInfo = SocketAddr;
+    type ConnectInfo = ConnectInfo;
     type ServerConfig = (SocketConfig, ListenerConfig);
     type StateError = std::io::Error;
 
@@ -151,8 +152,11 @@ impl Server for Listener {
         self.remotes_len()
     }
 
-    fn connect_info(&self) -> Self::ConnectInfo {
-        self.udp_socket.local_addr().expect("unable to get local addr")
+    fn connect_info(&self) -> Result<Self::ConnectInfo, ()> {
+        let local_addr = self.udp_socket.local_addr().expect("unable to get local addr");
+        Ok(ConnectInfo {
+            addr: local_addr
+        })
     }
 
     fn new_with<I: Into<Self::Init>>(local_addr: I) -> Result<Self, Self::StateError> where Self: Sized {

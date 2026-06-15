@@ -17,3 +17,7 @@ rbtl-tcp = { path = "./rbtl-tcp" }
 rbtl-core = { path = "./rbtl-core" }
 
 paste = "^1.0"
+serde = { version = "^1.0", optional = true }
+
+[features]
+default = ["serde"]

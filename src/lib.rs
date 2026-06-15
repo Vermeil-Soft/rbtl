@@ -9,5 +9,8 @@ mod common;
 mod macr;
 mod macr_default;
 
+#[cfg(feature = "serde")]
+pub use serde;
+
 pub use rbtl_core::{Client, Server, ServClient, Event, Status};
 pub use macr_default::{RBTLListener, RBTLKey, RBTLServClient, RBTLServClientMut, RBTLClient};

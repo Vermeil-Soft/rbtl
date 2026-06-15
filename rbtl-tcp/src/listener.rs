@@ -87,6 +87,10 @@ impl Listener {
     pub fn get(&self, addr: SocketAddr) -> Option<&Socket> {
         self.remotes.get(&addr)
     }
+
+    pub fn raw(&self) -> &TcpListener {
+        &self.tcp_listener
+    }
     
     /// Get the mutable socket stored for given the address
     pub fn get_mut(&mut self, addr: SocketAddr) -> Option<&mut Socket> {
