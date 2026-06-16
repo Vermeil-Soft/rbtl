@@ -3,6 +3,7 @@ use std::{
     net::{SocketAddr, UdpSocket, ToSocketAddrs},
     io::{Error as IoError, ErrorKind as IoErrorKind, Result as IoResult},
     sync::Arc,
+    fmt::Display,
     collections::VecDeque,
     time::{Duration, Instant},
 };
@@ -10,6 +11,7 @@ use std::{
 use x25519_dalek::{PublicKey, EphemeralSecret, SharedSecret};
 
 use crate::{
+    Error,
     PacketSendOptions, SocketIdentity,
     net::{
         connect_info::ConnectInfo,
@@ -382,11 +384,13 @@ impl SocketCommon<SocketKindShared> {
 
 impl SocketCommon<SocketKindUnique> {
     /// See `connect`, but provide the UDP socket instead of creating it
-    pub fn connect_with_socket(udp_socket: UdpSocket, remote_addr: SocketAddr) -> IoResult<Socket> {
+    pub fn connect_with_socket(udp_socket: UdpSocket, remote_addr: SocketAddr) -> Result<Socket, Error> {
         let udp_socket = Arc::new(udp_socket);
         crate::os::prepare_socket(&udp_socket);
-        udp_socket.set_nonblocking(true)?;
-        let local_addr = udp_socket.local_addr()?;
+        udp_socket.set_nonblocking(true)
+            .map_err(|e| Error::from_cause(format!("unable to set socket as nonblocking"), e))?;
+        let local_addr = udp_socket.local_addr()
+            .map_err(|e| Error::from_cause(format!("unable to get local addr"), e))?;
 
         let now = Instant::now();
 
@@ -406,7 +410,8 @@ impl SocketCommon<SocketKindUnique> {
             unknown_messages: Default::default(),
         };
         log::info!("trying to connect to remote {} with our identity {}...", socket.remote_addr(), socket.self_identity());
-        socket.socket.send_syn(now)?;
+        socket.socket.send_syn(now)
+            .map_err(|e| Error::from_cause(format!("unable to send first syn packet"), e))?;
 
         Ok(socket)
     }
@@ -422,12 +427,20 @@ impl SocketCommon<SocketKindUnique> {
     /// * The remote answered SynAck, and we set the status as "Connected"
     /// * The remote did not answer, and we will get a timeout
     // If you want to accept a new connection, use `new_incoming` instead.
-    pub fn connect<A: ToSocketAddrs>(remote_addr: A) -> IoResult<Socket> {
-        Self::connect_with_socket(UdpSocket::bind("0.0.0.0:0")?, remote_addr.to_socket_addrs()?.next().unwrap())
+    pub fn connect<A: ToSocketAddrs>(remote_addr: A) -> Result<Socket, Error> {
+        let socket = UdpSocket::bind("0.0.0.0:0")
+            .map_err(|e| Error::from_cause(format!("could not bind udp socket"), e))?;
+        let remote_addr = remote_addr.to_socket_addrs()
+            .map_err(|e| Error::from_cause(format!("no target addr found"), e))?
+            .next()
+            .ok_or_else(|| Error::new(format!("no target addr found")))?;
+        Self::connect_with_socket(socket, remote_addr)
     }
 
-    pub fn from_connect_info(connect_info: ConnectInfo) -> IoResult<Socket> {
-        Self::connect_with_socket(UdpSocket::bind("0.0.0.0:0")?, connect_info.addr)
+    pub fn from_connect_info(connect_info: ConnectInfo) -> Result<Socket, Error> {
+        let socket = UdpSocket::bind("0.0.0.0:0")
+            .map_err(|e| Error::from_cause(format!("could not bind udp socket"), e))?;
+        Self::connect_with_socket(socket, connect_info.addr)
     }
 
     /// Internal processing for this single source

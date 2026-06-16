@@ -285,9 +285,9 @@ fn fragment_combiner_success_clear() {
         fragment_combiner.push(fragment, Instant::now(), None);
     }
 
-    let out_message = fragment_combiner.next_out_message().unwrap();
+    let out_message = fragment_combiner.next_out_message().expect("out msg");
     assert_eq!(out_message.1.as_ref(), &[64, 64]);
-    let out_message = fragment_combiner.next_out_message().unwrap();
+    let out_message = fragment_combiner.next_out_message().expect("out msg2");
     assert_eq!(out_message.1.as_ref(), &[1, 2, 3, 4, 5, 6, 7, 8, 9]);
     assert!(fragment_combiner.next_out_message().is_none());
 }
@@ -311,6 +311,6 @@ fn fragment_combiner_success_encrypted() {
         fragment_combiner.push(fragment, Instant::now(), Some(&shared_secret));
     }
 
-    let out_message = fragment_combiner.next_out_message().unwrap();
+    let out_message = fragment_combiner.next_out_message().expect("out msg");
     assert_eq!(out_message.1.as_ref(), &[0, 1, 2, 3]);
 }

@@ -6,7 +6,7 @@ use std::{
 
 use hashbrown::{HashMap};
 
-use crate::{SeqId, Socket, SocketStatus, socket::{SocketConfig, SocketEvent}};
+use crate::{SeqId, Error, Socket, SocketStatus, socket::{SocketConfig, SocketEvent}};
 
 #[derive(Default, Clone)]
 pub struct ListenerConfig {
@@ -20,8 +20,13 @@ pub struct Listener {
 }
 
 impl Listener {
-    pub fn bind<A: ToSocketAddrs>(addr: A) -> Result<Self, IoError> {
-        let tcp_listener = TcpListener::bind(addr)?;
+    pub fn bind<A: ToSocketAddrs>(addr: A) -> Result<Self, Error> {
+        let remote_addr = addr.to_socket_addrs()
+            .map_err(|e| Error::from_cause(format!("no target addr found"), e))?
+            .next()
+            .ok_or_else(|| Error::new(format!("no target addr found")))?;
+        let tcp_listener = TcpListener::bind(remote_addr)
+            .map_err(|e| Error::from_cause(format!("could not bind {}", remote_addr), e))?;
         let _r = tcp_listener.set_nonblocking(true);
         Ok(Listener {
             tcp_listener,
@@ -60,6 +65,7 @@ impl Listener {
         while let Ok((stream, peer_addr)) = self.tcp_listener.accept() {
             let mut socket = Socket::new_from_tcp_stream(stream);
             socket.config = self.socket_config.clone();
+            log::info!("received incoming connection from {:?}", peer_addr);
             socket.insert_event(SocketEvent::Status(SocketStatus::Connected));
             self.remotes.insert(peer_addr, socket);
         }

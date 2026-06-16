@@ -13,4 +13,5 @@ mod macr_default;
 pub use serde;
 
 pub use rbtl_core::{Client, Server, ServClient, Event, Status};
-pub use macr_default::{RBTLListener, RBTLKey, RBTLServClient, RBTLServClientMut, RBTLClient};
+#[cfg(feature = "default-export")]
+pub use macr_default::*;

@@ -3,6 +3,7 @@
 macro_rules! _rbtl_structs_impl {
     ( $([$name:ident, $struct:ty] $(,)* )* ) => {
         paste::paste! {
+            
             pub struct RBTLListener {
                 pub $( [<$name:snake>] : $struct ,)*
             }
@@ -21,6 +22,11 @@ macro_rules! _rbtl_structs_impl {
                 pub $( [<$name:snake>] : Option<<$struct as $crate::Server>::ConnectInfo> ,)*
                 pub unknown: Vec<(u8, Box<[u8]>)>,
             }
+        }
+
+        #[derive(Clone, Copy, Debug)]
+        pub enum RBTLProtocolKind {
+            $($name,)*
         }
 
         /// A Client, e.g. connected to a server which we don't own
@@ -70,6 +76,12 @@ macro_rules! _rbtl_structs_impl {
                         $( Self::$name(client) => {
                             <<$struct as $crate::Server>::ConnectingClient as $crate::Client>::status(client)
                         } ,)*
+                    }
+                }
+
+                pub fn kind(&self) -> RBTLProtocolKind {
+                    match self {
+                        $( Self::$name(_) => RBTLProtocolKind::$name, )*
                     }
                 }
 
@@ -132,6 +144,12 @@ macro_rules! _rbtl_structs_impl {
                 pub fn status(&self) -> $crate::Status {
                     self.unmut().status()
                 }
+
+                pub fn kind(&self) -> RBTLProtocolKind {
+                    match self {
+                        $( Self::$name(_) => RBTLProtocolKind::$name, )*
+                    }
+                }
             }
 
             impl<'a> RBTLServClient<'a> {
@@ -154,6 +172,27 @@ macro_rules! _rbtl_structs_impl {
                         } ,)*
                     }
                 }
+
+                pub fn kind(&self) -> RBTLProtocolKind {
+                    match self {
+                        $( Self::$name(_) => RBTLProtocolKind::$name, )*
+                    }
+                }
+            }
+
+            impl RBTLProtocolKind {
+                pub fn rbtl_protocol_id(&self) -> u8 {
+                    match self {
+                        $( Self::$name => <$struct as $crate::rbtl_core::Server>::RBTL_PROTOCOL_ID, )*
+                    }
+                }
+
+                pub fn from_rbtl_protocol_id(id: u8) -> Option<Self> {
+                    $( if <$struct as $crate::rbtl_core::Server>::RBTL_PROTOCOL_ID == id {
+                        return Some(Self::$name)
+                    } )*
+                    None
+                }
             }
 
             impl RBTLListener {
@@ -167,7 +206,7 @@ macro_rules! _rbtl_structs_impl {
                 /// Returns the amount of adapters currently coded
                 pub fn adapters_len() -> usize {
                     0
-                        $( + <$struct as $crate::rbtl_core::Server>::RBTL_ID as usize * 0 + 1 )*
+                        $( + <$struct as $crate::rbtl_core::Server>::RBTL_PROTOCOL_ID as usize * 0 + 1 )*
                 }
 
                 /// Send a message to all remotes
@@ -279,7 +318,7 @@ macro_rules! rbtl_structs {
                             .ok()
                             .and_then(|r| r.clone().try_into().ok());
                         if let Some(bytes) = bytes {
-                            map.serialize_entry(&<$struct as $crate::Server>::RBTL_ID, &bytes.into_boxed_slice())?
+                            map.serialize_entry(&<$struct as $crate::Server>::RBTL_PROTOCOL_ID, &bytes.into_boxed_slice())?
                         }
                     )*
                     map.end()
@@ -310,7 +349,7 @@ macro_rules! rbtl_structs {
                             while let Some((key, value)) = map.next_entry::<u8, Box<[u8]>>()? {
                                 let mut found = false;
                                 $(
-                                    if key == <$struct as $crate::Server>::RBTL_ID {
+                                    if key == <$struct as $crate::Server>::RBTL_PROTOCOL_ID {
                                         [<$name:snake>] = <$struct as $crate::Server>::ConnectInfo::try_from(&*value).ok();
                                         found = true;
                                     }
@@ -320,7 +359,10 @@ macro_rules! rbtl_structs {
                                 }
                             }
                             
-                            Ok(RBTLConnectInfoParsed { tcp, rudp, unknown })
+                            Ok(RBTLConnectInfoParsed {
+                                $([<$name:snake>],)*
+                                unknown
+                            })
                         }
                     }
                     

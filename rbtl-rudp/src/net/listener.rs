@@ -2,13 +2,14 @@ use std::net::{SocketAddr, UdpSocket, ToSocketAddrs};
 use std::io::{ErrorKind as IoErrorKind, Result as IoResult};
 use std::sync::Arc;
 use std::time::Duration;
+use std::fmt::Display;
 
 use byteorder::{ByteOrder, LittleEndian};
 use hashbrown::{HashMap, hash_map::Entry};
 use std::ops::{Index, IndexMut};
 
 use crate::net::socket::{SocketCreateError};
-use crate::{PacketSendOptions, SeqId, SocketEvent, SocketShared};
+use crate::{PacketSendOptions, SeqId, SocketEvent, SocketShared, Error};
 use crate::net::common::{ListenerConfig, SocketConfig, PacketSendError};
 use crate::net::protocol::packet::{UdpBytes};
 
@@ -68,11 +69,13 @@ impl Listener {
     ///
     /// It's often a good idea to have a value like "0.0.0.0:YOUR_PORT",
     /// to bind your address to the internet.
-    pub fn new<A: ToSocketAddrs>(local_addr: A) -> IoResult<Listener> {
-        let udp_socket = Arc::new(UdpSocket::bind(local_addr)?);
+    pub fn new<A: ToSocketAddrs + Display>(local_addr: A) -> Result<Listener, Error> {
+        let udp_socket = Arc::new(UdpSocket::bind(&local_addr)
+            .map_err(|e| Error::from_cause(format!("failed to bind {}", local_addr), e))?);
 
         crate::os::prepare_socket(&udp_socket);
-        udp_socket.set_nonblocking(true)?;
+        udp_socket.set_nonblocking(true)
+            .map_err(|e| Error::from_cause(format!("failed to set socket as non blocking"), e))?;
         Ok(Listener {
             remotes: HashMap::default(),
             udp_socket,

@@ -162,7 +162,7 @@ fn build_data_from_fragments_success() {
         Fragment { seq_id: 5, frag_id: 2, frag_total: 2, frag_set_flags, data: Box::new([6, 7, 8, 9]) },
     ];
 
-    let message: Box<[u8]> = build_data_from_fragments(fragments.into_iter()).unwrap();
+    let message: Box<[u8]> = build_data_from_fragments(fragments.into_iter()).expect("built message");
     assert_eq!(message.as_ref(), &[1u8, 2, 3, 4, 5, 6, 7, 8, 9]);
 }
 
@@ -176,7 +176,7 @@ fn build_data_from_fragments_fail_wrong_frag_total() {
         Fragment { seq_id: 5, frag_id: 2, frag_total: 3, frag_set_flags, data: Box::new([6, 7, 8, 9]) },
     ];
 
-    build_data_from_fragments(fragments.into_iter()).unwrap();
+    build_data_from_fragments(fragments.into_iter()).expect("built msg error");
 }
 
 #[test]
@@ -187,7 +187,7 @@ fn build_data_from_fragments_fail_wrong_frag_id() {
         Fragment { seq_id: 5, frag_id: 5, frag_total: 1, frag_set_flags, data: Box::new([6, 7, 8, 9]) },
     ];
 
-    let e = build_data_from_fragments(fragments.into_iter()).unwrap_err();
+    let e = build_data_from_fragments(fragments.into_iter()).expect_err("built msg error");
     assert_eq!(e, ());
 }
 
@@ -199,7 +199,7 @@ fn build_data_from_fragments_fail_duplicate_frag_id() {
         Fragment { seq_id: 5, frag_id: 0, frag_total: 1, frag_set_flags, data: Box::new([6, 7, 8, 9]) },
     ];
 
-    let e = build_data_from_fragments(fragments.into_iter()).unwrap_err();
+    let e = build_data_from_fragments(fragments.into_iter()).expect_err("build fragment error");
     assert_eq!(e, ());
 }
 
@@ -225,9 +225,9 @@ fn build_rebuild_data() {
     let seq_id: SeqId = 1;
     let data = vec!(0; 1024);
     let flags = FragmentSetFlags::new().encrypted_cha_cha_20(true).expire(true).key(true);
-    let (frags_iter_boxed, _frag_total) = build_fragments_from_bytes(data.as_ref(), seq_id, flags).unwrap();
+    let (frags_iter_boxed, _frag_total) = build_fragments_from_bytes(data.as_ref(), seq_id, flags).expect("built fragments");
     let frags: Vec<Fragment<Box<[u8]>>> = frags_iter_boxed.map(|f| f.into_boxed()).collect();
-    let new_data = build_data_from_fragments(frags.into_iter()).unwrap();
+    let new_data = build_data_from_fragments(frags.into_iter()).expect("built fragments");
     assert_eq!(new_data.len(), data.len());
 }
 
@@ -236,8 +236,8 @@ fn build_one_frag_from_data() {
     let seq_id: SeqId = 1;
     let data = vec!(0; 1024);
     let flags = FragmentSetFlags::new();
-    let (mut frags_iter, frag_total) = build_fragments_from_bytes(data.as_ref(), seq_id, flags).unwrap();
-    let frag = frags_iter.next().unwrap();
+    let (mut frags_iter, frag_total) = build_fragments_from_bytes(data.as_ref(), seq_id, flags).expect("built fragments");
+    let frag = frags_iter.next().expect("frag");
     assert!(frags_iter.next().is_none()); 
     assert_eq!(frag.data.len(), 1024);
     assert_eq!(frag.seq_id, seq_id);
@@ -252,9 +252,9 @@ fn build_multiple_frags_from_data() {
     let seq_id: SeqId = 1;
     let data = vec!(0; 2048);
     let flags = FragmentSetFlags::new();
-    let (mut frags_iter, frag_total) = build_fragments_from_bytes(data.as_ref(), seq_id, flags).unwrap();
-    let frag_1 = frags_iter.next().unwrap();
-    let frag_2 = frags_iter.next().unwrap();
+    let (mut frags_iter, frag_total) = build_fragments_from_bytes(data.as_ref(), seq_id, flags).expect("built fragments");
+    let frag_1 = frags_iter.next().expect("frag1");
+    let frag_2 = frags_iter.next().expect("frag2");
     assert!(frags_iter.next().is_none()); 
     assert_eq!(frag_1.data.len(), MAX_FRAGMENT_INNER_SIZE);
     assert_eq!(frag_2.data.len(), 2048 - MAX_FRAGMENT_INNER_SIZE);

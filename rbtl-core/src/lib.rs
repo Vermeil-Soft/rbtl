@@ -7,6 +7,7 @@ pub enum Event {
     StatusChanged(Status),
 }
 
+#[derive(Clone)]
 pub enum Status {
     /// Trying to connect to the other party, cannot send data yet
     Connecting,
@@ -19,9 +20,7 @@ pub enum Status {
     /// The connection was ended, by us or the remote.
     Ended { by_remote: bool },
     /// An error that can be a protocol error, a network error, coming from us, the remote, ...
-    /// 
-    /// You must check `error()` to see the details of the error
-    Error,
+    Error(Arc<dyn std::error::Error>),
 }
 
 pub trait Client {
@@ -66,12 +65,12 @@ pub trait ServClient {
 }
 
 pub trait Server {
-    /// RBTL_ID: must be unique for each implementation. As a guideline, "public" implementations start from 0,
+    /// RBTL_PROTOCOL_ID: must be unique for each implementation. As a guideline, "public" implementations start from 0,
     /// while "private" ones go from 255 descending.
     ///
     /// Its purpose is to serialize/parse connection info, having an identifier that we know belongs to this impl
     /// helps
-    const RBTL_ID: u8;
+    const RBTL_PROTOCOL_ID: u8;
 
     type Key: Clone;
     type Init;

@@ -5,7 +5,7 @@ use std::{
 };
 
 use crate::{
-    Listener, Socket, SocketEvent, SocketStatus, ConnectInfo,
+    Listener, Socket, SocketEvent, SocketStatus, ConnectInfo, Error,
     listener::ListenerConfig, socket::SocketConfig
 };
 
@@ -16,7 +16,7 @@ fn convert_status(socket_status: SocketStatus) -> Status {
         SocketStatus::Connected => Status::Ok,
         SocketStatus::RemoteEnded => Status::Ended { by_remote: true },
         SocketStatus::LocalEnded => Status::Ended { by_remote: false },
-        SocketStatus::Error(_e) => Status::Error,
+        SocketStatus::Error(e) => Status::Error(Arc::new(e)),
         SocketStatus::Timeout => Status::Timeout,
     }
 }
@@ -47,8 +47,8 @@ impl From<TcpStream> for SocketInit {
 
 impl Client for Socket {
     type ClientConfig = ();
-    type StateError = std::io::Error;
-    type SendError = std::io::Error;
+    type StateError = Error;
+    type SendError = Error;
     type Init = SocketInit;
     type MessageId = u32;
     type SendOptions = ();
@@ -108,18 +108,18 @@ impl ServClient for Socket {
 }
 
 impl Server for Listener {
-    const RBTL_ID: u8 = 2;
+    const RBTL_PROTOCOL_ID: u8 = 2;
 
     type ServClient = Socket;
     type Init = Box<dyn ToSocketAddrs<Iter = IntoIter<SocketAddr>>>;
     type Key = SocketAddr;
     type ConnectingClient = Socket;
     type SendOptions = ();
-    type SendError = std::io::Error;
+    type SendError = Error;
     type MessageId = u32;
     type ServerConfig = (SocketConfig, ListenerConfig);
     type ConnectInfo = ConnectInfo;
-    type StateError = std::io::Error;
+    type StateError = Error;
 
     fn drain_events<'a>(&'a mut self) -> impl Iterator<Item=(Self::Key, Event)> + 'a {
         self.drain_events()

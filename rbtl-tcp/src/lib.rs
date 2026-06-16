@@ -23,11 +23,13 @@ mod socket;
 mod listener;
 mod rbtl_impl;
 mod connect_info;
+mod error;
 
 pub type SeqId = u32;
 
 pub use crate::{
     socket::{Socket, SocketEvent, SocketStatus},
     connect_info::ConnectInfo,
+    error::Error,
     listener::Listener
 };

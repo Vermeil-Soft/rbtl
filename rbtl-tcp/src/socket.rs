@@ -3,10 +3,11 @@ use byteorder::{BigEndian, ByteOrder};
 
 use std::{
     io::{Error as IoError, ErrorKind as IoErrorKind, Read, Write},
+    time::Duration,
     net::{SocketAddr, TcpStream, ToSocketAddrs}, time::Instant
 };
 
-use crate::{SeqId, ingester::{Ingester, IngesterResult}, ping_tracker::PingTracker};
+use crate::{SeqId, ingester::{Ingester, IngesterResult}, Error, ping_tracker::PingTracker};
 
 #[derive(Clone)]
 pub struct SocketConfig {
@@ -40,7 +41,7 @@ impl std::fmt::Debug for SocketEvent {
 #[derive(Clone, Debug)]
 pub enum SocketStatus {
     Connected,
-    Error(String),
+    Error(Error),
     Timeout,
     LocalEnded,
     RemoteEnded,
@@ -63,6 +64,7 @@ pub struct Socket {
     last_ok_seq_id: Option<SeqId>,
     ping_tracker: PingTracker,
     pub (crate) config: SocketConfig,
+    peer_addr: SocketAddr,
     status: SocketStatus,
 
     events: Vec<SocketEvent>,
@@ -74,14 +76,19 @@ pub (crate) const MSG_TYPE_DATA_HEAD_LEN: usize = 8;
 pub (crate) const MSG_TYPE_STATUS_HEAD_LEN: usize = 4;
 
 impl Socket {
+    const TIMEOUT_DURATION_DEFAULT: Duration = Duration::from_secs(5);
+
     pub (crate) fn prepare_tcp_stream(tcp_stream: &TcpStream) {
         let _r = tcp_stream.set_nodelay(true);
         let _r = tcp_stream.set_nonblocking(true);
+        let _r = tcp_stream.set_read_timeout(Some(Self::TIMEOUT_DURATION_DEFAULT));
+        let _r = tcp_stream.set_write_timeout(Some(Self::TIMEOUT_DURATION_DEFAULT));
     }
 
     pub fn new_from_tcp_stream(tcp_stream: TcpStream) -> Self {
         Self::prepare_tcp_stream(&tcp_stream);
         Self {
+            peer_addr: tcp_stream.peer_addr().unwrap(),
             tcp_stream,
             out_seq_id: 0,
             last_ok_seq_id: None,
@@ -99,8 +106,13 @@ impl Socket {
     }
 
     /// Connect to the remote. This call will block until the connection is made or dropped.
-    pub fn new<A: ToSocketAddrs>(remote_addr: A) -> Result<Self, IoError> {
-        let tcp_stream = TcpStream::connect(remote_addr)?;
+    pub fn new<A: ToSocketAddrs>(remote_addr: A) -> Result<Self, Error> {
+        let remote_addr = remote_addr.to_socket_addrs()
+            .map_err(|e| Error::from_cause(format!("unable to get socket addr"), e))?
+            .next()
+            .ok_or_else(|| Error::new(format!("unable to get socket addr")))?;
+        let tcp_stream = TcpStream::connect_timeout(&remote_addr, Self::TIMEOUT_DURATION_DEFAULT)
+            .map_err(|e| Error::from_cause(format!("unable to connect to {}", remote_addr), e))?;
         Ok(Self::new_from_tcp_stream(tcp_stream))
     }
 
@@ -152,6 +164,13 @@ impl Socket {
     }
 
     fn set_status(&mut self, status: SocketStatus) {
+        if !status.is_connected() {
+            if let SocketStatus::Error(err) = &status {
+                log::error!("conn with peer {} error: {}", self.peer_addr, err)
+            } else {
+                log::info!("disconnected from {}: {:?}", self.peer_addr, status);
+            }
+        }
         self.events.push(SocketEvent::Status(status.clone()));
         self.status = status;
     }
@@ -172,7 +191,7 @@ impl Socket {
                     Self::stream_send_status(&mut self.tcp_stream, seq_id);
                 },
                 IngesterResult::Error(err_msg) => {
-                    let new_status = SocketStatus::Error(err_msg);
+                    let new_status = SocketStatus::Error(Error::new(err_msg));
                     self.events.push(SocketEvent::Status(new_status.clone()));
                     self.status = new_status;
                 },
@@ -200,7 +219,9 @@ impl Socket {
                         self.set_status(SocketStatus::RemoteEnded);
                     },
                     _ => {
-                        self.set_status(SocketStatus::Error(format!("unexpected IO error {}", io_error.to_string())));
+                        self.set_status(SocketStatus::Error(
+                            Error::from_cause(format!("ingester unexpected IO"), io_error)
+                        ))
                     }
                 }
             }

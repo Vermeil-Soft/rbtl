@@ -1,11 +1,11 @@
 use std::{
-    net::{SocketAddr, ToSocketAddrs, UdpSocket},
+    net::{IpAddr, Ipv4Addr, SocketAddr, ToSocketAddrs, UdpSocket},
     sync::Arc,
     vec::IntoIter
 };
 
 use crate::{
-    Listener, SocketEvent, Socket, SocketCommon, SocketStatus, SocketShared, SocketIdentity,
+    Listener, SocketEvent, Socket, SocketCommon, SocketStatus, SocketShared, SocketIdentity, Error,
     net::{
         socket::SocketKind,
         connect_info::ConnectInfo,
@@ -39,9 +39,9 @@ fn map_event(socket_event: SocketEvent) -> Option<Event> {
 
 impl Client for Socket {
     type ClientConfig = SocketConfig;
-    type StateError = std::io::Error;
+    type StateError = Error;
     type SendError = PacketSendError;
-    type Init = (Box<dyn ToSocketAddrs<Iter = IntoIter<SocketAddr>>>, Option<UdpSocket>);
+    type Init = (Option<SocketAddr>, Option<UdpSocket>);
     type MessageId = u32;
     type SendOptions = PacketSendOptions;
 
@@ -63,8 +63,9 @@ impl Client for Socket {
     }
 
     fn new<I: Into<Self::Init>>(init: I) -> Result<Self, Self::StateError> where Self: Sized {
+
         let (socket_addr, udp_socket) = init.into();
-        let socket_addr = socket_addr.to_socket_addrs()?.next().unwrap();
+        let socket_addr = socket_addr.unwrap_or(SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 0));
         if let Some(socket) = udp_socket {
             Socket::connect_with_socket(socket, socket_addr)
         } else {
@@ -104,18 +105,18 @@ impl ServClient for SocketShared {
 }
 
 impl Server for Listener {
-    const RBTL_ID: u8 = 1;
+    const RBTL_PROTOCOL_ID: u8 = 1;
 
     type ServClient = SocketShared;
     type ConnectingClient = Socket;
-    type Init = Box<dyn ToSocketAddrs<Iter = IntoIter<SocketAddr>>>;
+    type Init = SocketAddr;
     type Key = SocketIdentity;
     type SendOptions = PacketSendOptions;
     type SendError = PacketSendError;
     type MessageId = u32;
     type ConnectInfo = ConnectInfo;
     type ServerConfig = (SocketConfig, ListenerConfig);
-    type StateError = std::io::Error;
+    type StateError = Error;
 
     fn drain_events<'a>(&'a mut self) -> impl Iterator<Item=(Self::Key, Event)> + 'a {
         self.drain_events()
@@ -161,7 +162,7 @@ impl Server for Listener {
 
     fn new_with<I: Into<Self::Init>>(local_addr: I) -> Result<Self, Self::StateError> where Self: Sized {
         let local_addr = local_addr.into();
-        Self::new(&*local_addr)
+        Self::new(local_addr)
     }
 
     fn new() -> Result<Self, Self::StateError> where Self: Sized {

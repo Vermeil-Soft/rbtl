@@ -374,7 +374,7 @@ impl<D: AsRef<[u8]> + 'static> UdpBytes<D> {
 fn udp_unrecognized_passthrough() {
     let received_message: &'static [u8] = b"HELLOWORLD";
     let received_fragment = UdpBytes::new(received_message);
-    let e = received_fragment.compute_packet().unwrap_err();
+    let e = received_fragment.compute_packet().expect_err("compute packet error");
     assert_eq!(e.1.as_bytes(), received_message);
 }
 
@@ -383,7 +383,7 @@ fn udp_unrecognized_passthrough() {
 fn udp_fail_not_big_enough() {
     let received_message: &'static [u8] = &[0u8, 0u8, 0u8, 0u8, 1u8, 2u8, 5u8];
     let received_fragment = UdpBytes::new(received_message);
-    let e = received_fragment.compute_packet().unwrap_err();
+    let e = received_fragment.compute_packet().expect_err("compute packet error");
     assert_eq!(e.0, UdpDataError::NotBigEnough);
 }
 
@@ -392,7 +392,7 @@ fn udp_fail_not_big_enough() {
 fn udp_fail_invalid_crc() {
     let received_message: &'static [u8] = &[0; 20];
     let received_udp_message = UdpBytes::new(received_message);
-    let e = received_udp_message.compute_packet().unwrap_err();
+    let e = received_udp_message.compute_packet().expect_err("compute packet error");
     assert_eq!(e.0, UdpDataError::InvalidCrc);
 }
 
@@ -407,7 +407,7 @@ fn udp_success_fragment_parse() {
         1 // data
     ];
     let udp_message = UdpBytes::new(received_message_bytes);
-    let packet = udp_message.compute_packet().unwrap();
+    let packet = udp_message.compute_packet().expect("compute packet");
     if let PacketVariant::Fragment(f) = &packet.packet_variant {
         assert_eq!(f.seq_id, 0);
         assert_eq!(f.frag_id, 0);
@@ -428,7 +428,7 @@ fn udp_fail_fragment_invalid_layout() {
         0xFE, 0xFD, 0x00, 0x00, // frag id / frag tot / frag flags
     ];
     let udp_message = UdpBytes::new(received_message_bytes);
-    let err = udp_message.compute_packet().unwrap_err();
+    let err = udp_message.compute_packet().expect_err("compute packet error");
     assert_eq!(err.0, UdpDataError::InvalidFragLayout(0xFE, 0xFD));
 }
 
@@ -443,7 +443,7 @@ fn udp_success_ack_parse() {
         0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF // data
     ];
     let udp_message = UdpBytes::new(received_message_bytes);
-    let packet = udp_message.compute_packet().unwrap();
+    let packet = udp_message.compute_packet().expect("compute packet");
     if let PacketVariant::Ack { seq_id, slice } = &packet.packet_variant {
         assert_eq!(*seq_id, 5);
         assert_eq!(slice.as_ref().len(), 8);
@@ -465,7 +465,7 @@ fn udp_success_syn_parse() {
         0x00, 0xFF, 0x00, 0xFF, 0x00, 0xFF, 0x00, 0xFF,
     ];
     let udp_message = UdpBytes::new(received_message_bytes);
-    let packet = udp_message.compute_packet().unwrap();
+    let packet = udp_message.compute_packet().expect("compute packet");
     if let PacketVariant::Syn { pub_key } = &packet.packet_variant {
         assert_eq!(pub_key[0], 0);
         assert_eq!(pub_key[1], 255);
@@ -487,7 +487,7 @@ fn udp_success_synack_parse() {
         0x00, 0xFF, 0x00, 0xFF, 0x00, 0xFF, 0x00, 0xFF,
     ];
     let udp_message = UdpBytes::new(received_message_bytes);
-    let packet = udp_message.compute_packet().unwrap();
+    let packet = udp_message.compute_packet().expect("compute packet");
     if let PacketVariant::SynAck { pub_key } = &packet.packet_variant {
         assert_eq!(pub_key[0], 0);
         assert_eq!(pub_key[1], 255);
@@ -505,7 +505,7 @@ fn udp_success_heartbeat_parse() {
         0xFF, 0x0A, 0x00, 0x00, // frag id / frag tot / frag flags
     ];
     let udp_message = UdpBytes::new(received_message_bytes);
-    let packet = udp_message.compute_packet().unwrap();
+    let packet = udp_message.compute_packet().expect("compute packet");
     if let PacketVariant::Heartbeat = packet.packet_variant {
     } else {
         panic!("Received packet was not a fragment SYNACK");
@@ -518,7 +518,7 @@ fn udp_ser_de_ack() {
     let ack = PacketVariant::Ack { seq_id: 9, slice: vec![0xAA, 0xAA].into_boxed_slice() };
     let packet = Packet::new([0xEE; 4], ack);
     let udp_packet = UdpBytes::from(&packet);
-    let parsed = udp_packet.compute_packet().unwrap();
+    let parsed = udp_packet.compute_packet().expect("compute packet");
     if !packet.cmp_with(&parsed) {
         panic!("{:?} != {:?}, ack serialized is different from deserialized", packet, parsed);
     }
@@ -546,11 +546,11 @@ fn udp_ser_de_syn_synack_others() {
     let abort_packet = UdpBytes::from(&abort1);
     let heartbeat_packet = UdpBytes::from(&heartbeat1);
 
-    let syn2 = syn_packet.compute_packet().unwrap();
-    let synack2 = synack_packet.compute_packet().unwrap();
-    let end2 = end_packet.compute_packet().unwrap();
-    let abort2 = abort_packet.compute_packet().unwrap();
-    let heartbeat2 = heartbeat_packet.compute_packet().unwrap();
+    let syn2 = syn_packet.compute_packet().expect("compute packet syn2");
+    let synack2 = synack_packet.compute_packet().expect("compute packet synack2");
+    let end2 = end_packet.compute_packet().expect("compute packet end2");
+    let abort2 = abort_packet.compute_packet().expect("compute packet abort2");
+    let heartbeat2 = heartbeat_packet.compute_packet().expect("compute packet heartbeat2");
     if !syn1.cmp_with(&syn2) {
         panic!("{:?} != {:?}, syn serialized is different from deserialized", syn1, syn2);
     }
@@ -581,7 +581,7 @@ fn udp_success_frag_conversions() {
     let packet = Packet::new([0x00, 0xFF, 0x00, 0xFF], PacketVariant::Fragment(sent_fragment.clone()));
     let udp_message: UdpBytes<_> = UdpBytes::from(&packet);
 
-    let received_packet = udp_message.compute_packet().unwrap();
+    let received_packet = udp_message.compute_packet().expect("compute packet");
 
     if let PacketVariant::Fragment(f) = &received_packet.packet_variant {
         assert_eq!(f.seq_id, sent_fragment.seq_id);
