@@ -2,7 +2,9 @@ use byteorder::{BigEndian, ByteOrder};
 
 use crate::{
     SeqId, 
-    socket::{MSG_TYPE_DATA_HEAD_LEN, MSG_TYPE_DATA_ID, MSG_TYPE_STATUS_HEAD_LEN, MSG_TYPE_STATUS_ID}
+    socket::{
+        MSG_TYPE_DATA_HEAD_LEN, MSG_TYPE_DATA_ID, MSG_TYPE_HEARTBEAT_ID, MSG_TYPE_STATUS_HEAD_LEN, MSG_TYPE_STATUS_ID
+    }
 };
 
 pub (crate) struct Ingester {
@@ -57,6 +59,9 @@ impl Ingester {
                             self.take_bytes(tail, max_len);
                         },
                     };
+                } else if id == MSG_TYPE_HEARTBEAT_ID {
+                    self.results.push(IngesterResult::Heartbeat);
+                    self.take_bytes(headless_bytes, max_len);
                 } else {
                     let msg = format!("wrong rbtl-tcp msg id {}", id);
                     self.results.push(IngesterResult::Error(msg));
@@ -102,7 +107,7 @@ impl Ingester {
                         },
                     };
                 } else {
-                    let msg = format!("wrong rbtl-tcp msg id {}", id);
+                    let msg = format!("wrong rbtl-tcp (incomplete) msg id {}", id);
                     self.results.push(IngesterResult::Error(msg));
                 }
             },
@@ -127,6 +132,7 @@ impl Ingester {
 #[derive(PartialEq, Eq, Debug)]
 pub (crate) enum IngesterResult {
     Data(SeqId, Vec<u8>),
+    Heartbeat,
     SeqIdOk(SeqId),
     Error(String),
 }

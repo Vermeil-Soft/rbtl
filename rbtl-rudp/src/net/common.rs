@@ -53,7 +53,7 @@ pub struct SocketConfig {
 }
 
 impl SocketConfig {
-    pub const DEFAULT_TIMEOUT_DELAY: Duration = Duration::from_secs(10);
+    pub const DEFAULT_TIMEOUT_DELAY: Duration = Duration::from_secs(5);
     pub const DEFAULT_HEARTBEAT_DELAY: Duration = Duration::from_secs(1);
     pub const DEFAULT_TRANSFER_RAW: bool = false;
     pub const DEFAULT_TRANSFER_UNKNOWN_RAW: bool = false;

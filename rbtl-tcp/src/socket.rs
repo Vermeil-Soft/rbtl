@@ -11,7 +11,8 @@ use crate::{SeqId, ingester::{Ingester, IngesterResult}, Error, ping_tracker::Pi
 
 #[derive(Clone)]
 pub struct SocketConfig {
-    pub max_msg_len: u32
+    pub max_msg_len: u32,
+    pub timeout_ms: u64,
 }
 
 impl SocketConfig {
@@ -19,7 +20,8 @@ impl SocketConfig {
 
     pub fn new() -> Self {
         Self {
-            max_msg_len: Self::MAX_MSG_LEN
+            max_msg_len: Self::MAX_MSG_LEN,
+            timeout_ms: Socket::TIMEOUT_DURATION_DEFAULT_MS,
         }
     }
 }
@@ -66,17 +68,21 @@ pub struct Socket {
     pub (crate) config: SocketConfig,
     peer_addr: SocketAddr,
     status: SocketStatus,
+    last_recv_heartbeat: Instant,
+    last_sent_heartbeat: Instant,
 
     events: Vec<SocketEvent>,
 }
 
 pub (crate) const MSG_TYPE_DATA_ID: u8 = 0;
 pub (crate) const MSG_TYPE_STATUS_ID: u8 = 1;
+pub (crate) const MSG_TYPE_HEARTBEAT_ID: u8 = 2;
 pub (crate) const MSG_TYPE_DATA_HEAD_LEN: usize = 8;
 pub (crate) const MSG_TYPE_STATUS_HEAD_LEN: usize = 4;
 
 impl Socket {
-    const TIMEOUT_DURATION_DEFAULT: Duration = Duration::from_secs(5);
+    pub const TIMEOUT_DURATION_DEFAULT_MS: u64 = 5000;
+    pub const TIMEOUT_DURATION_DEFAULT: Duration = Duration::from_millis(Self::TIMEOUT_DURATION_DEFAULT_MS);
 
     pub (crate) fn prepare_tcp_stream(tcp_stream: &TcpStream) {
         let _r = tcp_stream.set_nodelay(true);
@@ -87,6 +93,7 @@ impl Socket {
 
     pub fn new_from_tcp_stream(tcp_stream: TcpStream) -> Self {
         Self::prepare_tcp_stream(&tcp_stream);
+        let now = Instant::now();
         Self {
             peer_addr: tcp_stream.peer_addr().unwrap(),
             tcp_stream,
@@ -95,6 +102,8 @@ impl Socket {
             ping_tracker: PingTracker::new(),
             config: SocketConfig::new(),
             ingester: Ingester::new(),
+            last_recv_heartbeat: now,
+            last_sent_heartbeat: now,
             status: SocketStatus::Connected,
 
             events: Vec::new(),
@@ -118,9 +127,6 @@ impl Socket {
 
     /// Receives a single call of tcp socket read and stores it in the ingester
     fn recv_single(&mut self) -> Result<(), IoError> {
-        if !self.status.is_connected() {
-            return Ok(());
-        }
         let mut buf = [0; 2048];
         let size = self.tcp_stream.read(&mut buf)?;
         if size == 0 {
@@ -163,16 +169,20 @@ impl Socket {
         self.ping_tracker.ping(seq_id);
     }
 
-    fn set_status(&mut self, status: SocketStatus) {
-        if !status.is_connected() {
-            if let SocketStatus::Error(err) = &status {
+    fn set_status(&mut self, new_status: SocketStatus) {
+        if !new_status.is_connected() {
+            if let SocketStatus::Error(err) = &new_status {
                 log::error!("conn with peer {} error: {}", self.peer_addr, err)
             } else {
-                log::info!("disconnected from {}: {:?}", self.peer_addr, status);
+                log::info!("disconnected from {}: {:?}", self.peer_addr, new_status);
             }
         }
-        self.events.push(SocketEvent::Status(status.clone()));
-        self.status = status;
+        if new_status.is_connected() || self.status.is_connected() {
+            // if either the new or old status is connected, update the events. Otherwise do nothing.
+            // this prevents Timeout from being overwritten by RemoteEnded, or LocalEnded overwritten by RemoteEnded...
+            self.events.push(SocketEvent::Status(new_status.clone()));
+            self.status = new_status;
+        }
     }
 
     pub (crate) fn insert_event(&mut self, socket_event: SocketEvent) {
@@ -183,12 +193,15 @@ impl Socket {
         !self.events.is_empty()
     }
 
-    fn process_ingester_results(&mut self) {
+    fn process_ingester_results(&mut self, now: Instant) {
         for ingester_result in self.ingester.results.drain(..) {
             match ingester_result {
                 IngesterResult::Data(seq_id, data) => {
                     self.events.push(SocketEvent::Data(data.into_boxed_slice()));
                     Self::stream_send_status(&mut self.tcp_stream, seq_id);
+                },
+                IngesterResult::Heartbeat => {
+                    self.last_recv_heartbeat = now;
                 },
                 IngesterResult::Error(err_msg) => {
                     let new_status = SocketStatus::Error(Error::new(err_msg));
@@ -202,9 +215,27 @@ impl Socket {
         }
     }
 
+    fn maybe_send_heartbeat(&mut self, now: Instant) {
+        if !self.status.is_connected() {
+            return;
+        }
+        const HEARTBEAT_INTERVAL: Duration = Duration::from_millis(1000);
+        let sent_diff = now.saturating_duration_since(self.last_sent_heartbeat);
+        if sent_diff >= HEARTBEAT_INTERVAL {
+            let _r = self.tcp_stream.write(&[MSG_TYPE_HEARTBEAT_ID]);
+            self.last_sent_heartbeat = now;
+        }
+    }
+
     pub fn process(&mut self) {
         let r = self.recv_all();
-        self.process_ingester_results();
+        let now = Instant::now();
+        self.process_ingester_results(now);
+        let heartbeat_diff = now.saturating_duration_since(self.last_recv_heartbeat);
+        if heartbeat_diff >= Duration::from_millis(self.config.timeout_ms) {
+            self.set_status(SocketStatus::Timeout);
+        }
+        self.maybe_send_heartbeat(now);
         match r {
             Ok(()) => {},
             Err(io_error) => {
@@ -246,6 +277,7 @@ impl Socket {
     }
 
     pub fn end(&mut self) {
+        let _r = self.tcp_stream.shutdown(std::net::Shutdown::Write);
         self.set_status(SocketStatus::LocalEnded);
     }
 
