@@ -47,17 +47,17 @@ impl Listener {
     }
 
     /// Send some data to a single remote
-    pub fn send_data_to<I: AsRef<[u8]>>(&mut self, data: I, identity: SocketAddr) -> Result<SeqId, ()> {
+    pub fn send_data_to<I: AsRef<[u8]>>(&mut self, data: I, identity: SocketAddr) -> Result<SeqId, Error> {
         match self.remotes.get_mut(&identity) {
-            Some(s) => Ok(s.send_data(data.as_ref())),
-            None => Err(())
+            Some(s) => s.send_data(data.as_ref()),
+            None => Err(Error::new(format!("remote {} not found", identity))),
         }
     }
 
     /// Send some data to ALL remotes
     pub fn send_data<I: AsRef<[u8]>>(&mut self, data: I) {
         for socket in self.remotes.values_mut() {
-            socket.send_data(data.as_ref());
+            let _r = socket.send_data(data.as_ref());
         }
     }
 

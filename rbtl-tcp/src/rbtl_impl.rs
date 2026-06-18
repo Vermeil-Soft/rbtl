@@ -13,6 +13,7 @@ use rbtl_core::{Client, Event, ServClient, Server, Status};
 
 fn convert_status(socket_status: SocketStatus) -> Status {
     match socket_status {
+        SocketStatus::Connecting => Status::Connecting,
         SocketStatus::Connected => Status::Ok,
         SocketStatus::RemoteEnded => Status::Ended { by_remote: true },
         SocketStatus::LocalEnded => Status::Ended { by_remote: false },
@@ -71,7 +72,7 @@ impl Client for Socket {
 
     fn new<I: Into<Self::Init>>(init: I) -> Result<Self, Self::StateError> where Self: Sized {
         match init.into() {
-            SocketInit::Addr(addr) => Socket::new(&*addr),
+            SocketInit::Addr(addr) => Socket::new_blocking(&*addr),
             SocketInit::Stream(stream) => Ok(Socket::new_from_tcp_stream(stream)),
         }
     }
@@ -86,7 +87,7 @@ impl Client for Socket {
 
     fn send<B>(&mut self, bytes: B, _send_opts: Self::SendOptions) -> Result<Self::MessageId, Self::SendError>
             where B: Into<Arc<[u8]>> + AsRef<[u8]> + Clone {
-        Ok(self.send_data(bytes))
+        self.send_data(bytes)
     }
 }
 
@@ -95,7 +96,7 @@ impl ServClient for Socket {
 
     fn send<B: Into<Arc<[u8]>> + AsRef<[u8]> + Clone>(&mut self, bytes: B, _send_opts: ()) 
             -> Result<<Self::Server as Server>::MessageId, <Self::Server as Server>::SendError> {
-        Ok(self.send_data(bytes))
+        self.send_data(bytes)
     }
 
     fn ping(&self, seconds: f32) -> Option<f32> {

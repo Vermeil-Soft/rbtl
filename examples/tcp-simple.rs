@@ -33,9 +33,9 @@ fn main_server() {
 
 fn main_client(arg1: Option<String>) {
     let mut socket = if let Some(addr) = arg1 {
-        Socket::new(&format!("{}:1234", addr)).unwrap()
+        Socket::new_blocking(&format!("{}:1234", addr)).unwrap()
     } else {
-        Socket::new("127.0.0.1:1234").unwrap()
+        Socket::new_blocking("127.0.0.1:1234").unwrap()
     };
 
     for i in 0..500 {

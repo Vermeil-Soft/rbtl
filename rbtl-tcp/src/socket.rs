@@ -1,8 +1,9 @@
-
 use byteorder::{BigEndian, ByteOrder};
 
 use std::{
     io::{Error as IoError, ErrorKind as IoErrorKind, Read, Write},
+    sync::{Arc, OnceLock},
+    cell::UnsafeCell,
     time::Duration,
     net::{SocketAddr, TcpStream, ToSocketAddrs}, time::Instant
 };
@@ -42,6 +43,7 @@ impl std::fmt::Debug for SocketEvent {
 
 #[derive(Clone, Debug)]
 pub enum SocketStatus {
+    Connecting,
     Connected,
     Error(Error),
     Timeout,
@@ -60,7 +62,7 @@ impl SocketStatus {
 }
 
 pub struct Socket {
-    pub (crate) tcp_stream: TcpStream,
+    pub (crate) tcp_stream: Arc<UnsafeCell<OnceLock<TcpStream>>>,
     ingester: Ingester,
     out_seq_id: SeqId,
     last_ok_seq_id: Option<SeqId>,
@@ -93,9 +95,13 @@ impl Socket {
 
     pub fn new_from_tcp_stream(tcp_stream: TcpStream) -> Self {
         Self::prepare_tcp_stream(&tcp_stream);
+        let peer_addr = tcp_stream.peer_addr().unwrap();
+        let lock = OnceLock::new();
+        let _r = lock.set(tcp_stream);
+        let tcp_stream = Arc::new(UnsafeCell::new(lock));
         let now = Instant::now();
         Self {
-            peer_addr: tcp_stream.peer_addr().unwrap(),
+            peer_addr,
             tcp_stream,
             out_seq_id: 0,
             last_ok_seq_id: None,
@@ -105,17 +111,15 @@ impl Socket {
             last_recv_heartbeat: now,
             last_sent_heartbeat: now,
             status: SocketStatus::Connected,
-
             events: Vec::new(),
         }
     }
 
-    pub fn raw(&self) -> &TcpStream {
-        &self.tcp_stream
-    }
-
-    /// Connect to the remote. This call will block until the connection is made or dropped.
-    pub fn new<A: ToSocketAddrs>(remote_addr: A) -> Result<Self, Error> {
+    /// Create a connection connecting the remote.
+    /// 
+    /// Unlike `TcpStream`, this wil lreturn immediatly, you must listen to SocketEvent to know whether or not
+    /// this socket is connected.
+    pub fn new_blocking<A: ToSocketAddrs>(remote_addr: A) -> Result<Self, Error> {
         let remote_addr = remote_addr.to_socket_addrs()
             .map_err(|e| Error::from_cause(format!("unable to get socket addr"), e))?
             .next()
@@ -125,10 +129,37 @@ impl Socket {
         Ok(Self::new_from_tcp_stream(tcp_stream))
     }
 
+    pub fn raw(&self) -> Option<&TcpStream> {
+        let ptr = self.tcp_stream.get();
+        if let Some(tcp_stream) = unsafe { (*ptr).get() } {
+            Some(&tcp_stream)
+        } else {
+            None
+        }
+    }
+
+    /// borrow checker purposes
+    fn stream_raw_mut(lock: &mut Arc<UnsafeCell<OnceLock<TcpStream>>>) -> Option<&mut TcpStream> {
+        let ptr = lock.get();
+        // safety: this is safe as long as we never `take` the value from the lock
+        if let Some(tcp_stream) = unsafe { (*ptr).get_mut() } {
+            Some(unsafe { &mut *(tcp_stream as *mut TcpStream) })
+        } else {
+            None
+        }
+    }
+
+    pub fn raw_mut(&mut self) -> Option<&mut TcpStream> {
+        Self::stream_raw_mut(&mut self.tcp_stream)
+    }
+
     /// Receives a single call of tcp socket read and stores it in the ingester
     fn recv_single(&mut self) -> Result<(), IoError> {
         let mut buf = [0; 2048];
-        let size = self.tcp_stream.read(&mut buf)?;
+        let Some(tcp_stream) = self.raw_mut() else {
+            return Ok(())
+        };
+        let size = tcp_stream.read(&mut buf)?;
         if size == 0 {
             return Err(IoError::new(IoErrorKind::ConnectionReset, "end of stream"));
         }
@@ -159,14 +190,19 @@ impl Socket {
         let _r = stream.write(&out_bytes);
     }
 
-    fn internal_send_data(&mut self, seq_id: u32, bytes: &[u8]) {
+    fn internal_send_data(&mut self, seq_id: u32, bytes: &[u8]) -> Result<(), Error> {
+        let Some(tcp_stream) = self.raw_mut() else {
+            return Err(Error::new(format!("not connected yet")))
+        };
         let mut out_bytes = vec![0u8; 9 + bytes.len()];
         out_bytes[0] = MSG_TYPE_DATA_ID;
         BigEndian::write_u32(&mut out_bytes[1..5], seq_id);
         BigEndian::write_u32(&mut out_bytes[5..9], bytes.len() as u32);
         out_bytes[9..].copy_from_slice(bytes);
-        let _r = self.tcp_stream.write(&out_bytes);
+        tcp_stream.write(&out_bytes)
+            .map_err(|e| Error::from_cause(format!("tcp write err"), e))?;
         self.ping_tracker.ping(seq_id);
+        Ok(())
     }
 
     fn set_status(&mut self, new_status: SocketStatus) {
@@ -198,7 +234,9 @@ impl Socket {
             match ingester_result {
                 IngesterResult::Data(seq_id, data) => {
                     self.events.push(SocketEvent::Data(data.into_boxed_slice()));
-                    Self::stream_send_status(&mut self.tcp_stream, seq_id);
+                    if let Some(tcp_stream) = Self::stream_raw_mut(&mut self.tcp_stream) {
+                        Self::stream_send_status(tcp_stream, seq_id);
+                    }
                 },
                 IngesterResult::Heartbeat => {
                     self.last_recv_heartbeat = now;
@@ -222,7 +260,9 @@ impl Socket {
         const HEARTBEAT_INTERVAL: Duration = Duration::from_millis(1000);
         let sent_diff = now.saturating_duration_since(self.last_sent_heartbeat);
         if sent_diff >= HEARTBEAT_INTERVAL {
-            let _r = self.tcp_stream.write(&[MSG_TYPE_HEARTBEAT_ID]);
+            if let Some(tcp_stream) = Self::stream_raw_mut(&mut self.tcp_stream) {
+                let _r = tcp_stream.write(&[MSG_TYPE_HEARTBEAT_ID]);
+            }
             self.last_sent_heartbeat = now;
         }
     }
@@ -277,15 +317,17 @@ impl Socket {
     }
 
     pub fn end(&mut self) {
-        let _r = self.tcp_stream.shutdown(std::net::Shutdown::Write);
+        if let Some(tcp_stream) = self.raw_mut() {
+            let _r = tcp_stream.shutdown(std::net::Shutdown::Write);
+        }
         self.set_status(SocketStatus::LocalEnded);
     }
 
-    pub fn send_data<B>(&mut self, bytes: B) -> SeqId where B: AsRef<[u8]> {
+    pub fn send_data<B>(&mut self, bytes: B) -> Result<SeqId, Error> where B: AsRef<[u8]> {
         let seq_id = self.out_seq_id;
         self.out_seq_id = self.out_seq_id.wrapping_add(1);
-        self.internal_send_data(seq_id, bytes.as_ref());
-        seq_id
+        self.internal_send_data(seq_id, bytes.as_ref())?;
+        Ok(seq_id)
     }
 
     pub fn status(&self) -> SocketStatus {
