@@ -1,6 +1,6 @@
 //! Trait used by the RBTL implementors
 
-use std::{error::Error, sync::Arc};
+use std::{error::Error, sync::Arc, fmt::Debug};
 
 pub enum Event {
     Data(Box<[u8]>),
@@ -13,9 +13,7 @@ pub enum Status {
     Connecting,
     /// Connected and everything is in order
     Ok,
-    /// A timeout error
-    ///
-    /// You can check `error()` to see the details of the error, but realistically you probably will not need it
+    /// A timeout error, either while connecting or being already connected
     Timeout,
     /// The connection was ended, by us or the remote.
     Ended { by_remote: bool },
@@ -24,7 +22,7 @@ pub enum Status {
 }
 
 pub trait Client {
-    type ClientConfig;
+    type ClientConfig: Clone + Debug;
     type Init;
     type SendOptions;
     type SendError;
@@ -71,10 +69,11 @@ pub trait Server {
     /// Its purpose is to serialize/parse connection info, having an identifier that we know belongs to this impl
     /// helps
     const RBTL_PROTOCOL_ID: u8;
+    const RBTL_PROTOCOL_NAME: &str;
 
     type Key: Clone;
     type Init;
-    type ServerConfig;
+    type ServerConfig: Clone + Debug;
     type ServClient: ServClient;
     type ConnectingClient;
     type SendOptions: Default;

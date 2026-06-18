@@ -106,6 +106,7 @@ impl ServClient for SocketShared {
 
 impl Server for Listener {
     const RBTL_PROTOCOL_ID: u8 = 1;
+    const RBTL_PROTOCOL_NAME: &str = "tcp";
 
     type ServClient = SocketShared;
     type ConnectingClient = Socket;

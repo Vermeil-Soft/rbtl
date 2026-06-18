@@ -8,7 +8,7 @@ use hashbrown::{HashMap};
 
 use crate::{SeqId, Error, Socket, SocketStatus, socket::{SocketConfig, SocketEvent}};
 
-#[derive(Default, Clone)]
+#[derive(Default, Clone, Debug)]
 pub struct ListenerConfig {
 }
 

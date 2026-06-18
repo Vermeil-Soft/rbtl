@@ -109,6 +109,7 @@ impl ServClient for Socket {
 
 impl Server for Listener {
     const RBTL_PROTOCOL_ID: u8 = 2;
+    const RBTL_PROTOCOL_NAME: &str = "rudp";
 
     type ServClient = Socket;
     type Init = Box<dyn ToSocketAddrs<Iter = IntoIter<SocketAddr>>>;

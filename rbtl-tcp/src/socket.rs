@@ -9,7 +9,7 @@ use std::{
 
 use crate::{SeqId, ingester::{Ingester, IngesterResult}, Error, ping_tracker::PingTracker};
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct SocketConfig {
     pub max_msg_len: u32,
     pub timeout_ms: u64,

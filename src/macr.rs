@@ -22,6 +22,21 @@ macro_rules! _rbtl_structs_impl {
                 pub $( [<$name:snake>] : Option<<$struct as $crate::Server>::ConnectInfo> ,)*
                 pub unknown: Vec<(u8, Box<[u8]>)>,
             }
+
+            #[derive(Clone, Debug)]
+            pub struct RBTLServConfig {
+                pub $( [<$name:snake>] : <$struct as $crate::Server>::ServerConfig,)*
+            }
+
+            #[derive(Clone, Debug)]
+            pub struct RBTLClientConfig {
+                pub $( [<$name:snake>] : <<$struct as $crate::Server>::ConnectingClient as $crate::Client>::ClientConfig,)*
+            }
+
+            #[derive(Clone, Debug)]
+            pub enum RBTLClientConfigSingle {
+                $( $name(<<$struct as $crate::Server>::ConnectingClient as $crate::Client>::ClientConfig ),)*
+            }
         }
 
         #[derive(Clone, Copy, Debug)]
@@ -75,6 +90,28 @@ macro_rules! _rbtl_structs_impl {
                     match self {
                         $( Self::$name(client) => {
                             <<$struct as $crate::Server>::ConnectingClient as $crate::Client>::status(client)
+                        } ,)*
+                    }
+                }
+
+                pub fn set_config(&mut self, config: RBTLClientConfig) {
+                    match self {
+                        $( Self::$name(client) => {
+                            <<$struct as $crate::Server>::ConnectingClient as $crate::Client>::set_config(
+                                client,
+                                config.[<$name:snake>]
+                            )
+                        } ,)*
+                    }
+                }
+
+                pub fn get_config(&mut self) -> RBTLClientConfigSingle {
+                    match self {
+                        $( Self::$name(client) => {
+                            let config = <<$struct as $crate::Server>::ConnectingClient as $crate::Client>::get_config(
+                                client
+                            );
+                            RBTLClientConfigSingle::$name(config)
                         } ,)*
                     }
                 }
@@ -181,6 +218,12 @@ macro_rules! _rbtl_structs_impl {
             }
 
             impl RBTLProtocolKind {
+                pub fn rbtl_protocol_name(&self) -> &'static str {
+                    match self {
+                        $( Self::$name => <$struct as $crate::rbtl_core::Server>::RBTL_PROTOCOL_NAME, )*
+                    }
+                }
+
                 pub fn rbtl_protocol_id(&self) -> u8 {
                     match self {
                         $( Self::$name => <$struct as $crate::rbtl_core::Server>::RBTL_PROTOCOL_ID, )*
@@ -192,6 +235,12 @@ macro_rules! _rbtl_structs_impl {
                         return Some(Self::$name)
                     } )*
                     None
+                }
+            }
+
+            impl std::fmt::Display for RBTLProtocolKind {
+                fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
+                    write!(f, "{}", self.rbtl_protocol_name())
                 }
             }
 
@@ -207,6 +256,21 @@ macro_rules! _rbtl_structs_impl {
                 pub fn adapters_len() -> usize {
                     0
                         $( + <$struct as $crate::rbtl_core::Server>::RBTL_PROTOCOL_ID as usize * 0 + 1 )*
+                }
+
+                pub fn set_config(&mut self, config: RBTLServConfig) {
+                    $(
+                        <$struct as $crate::Server>::set_config(
+                            &mut self.[<$name:snake>],
+                            config.[<$name:snake>]
+                        );
+                    )*
+                }
+
+                pub fn get_config(&mut self) -> RBTLServConfig {
+                    RBTLServConfig {
+                        $( [<$name:snake>]: <$struct as $crate::Server>::get_config(&self.[<$name:snake>]), )*
+                    }
                 }
 
                 /// Send a message to all remotes
