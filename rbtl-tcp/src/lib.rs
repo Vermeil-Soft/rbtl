@@ -24,6 +24,7 @@ mod listener;
 mod rbtl_impl;
 mod connect_info;
 mod error;
+mod darkmagic;
 
 pub type SeqId = u32;
 

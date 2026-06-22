@@ -1,4 +1,4 @@
-use rbtl_tcp::{Listener, Socket};
+use rbtl_tcp::{Listener, Socket, SocketStatus};
 
 // for the example, you need to start the server, then the client
 fn main() {
@@ -33,17 +33,19 @@ fn main_server() {
 
 fn main_client(arg1: Option<String>) {
     let mut socket = if let Some(addr) = arg1 {
-        Socket::new_blocking(&format!("{}:1234", addr)).unwrap()
+        Socket::new(&format!("{}:1234", addr)).unwrap()
     } else {
-        Socket::new_blocking("127.0.0.1:1234").unwrap()
+        Socket::new("127.0.0.1:1234").unwrap()
     };
 
     for i in 0..500 {
         socket.process();
-        if i == 10 {
-            socket.send_data(b"HELLOFROMCLIENT1");
-        } else if i == 450 {
-            socket.end();
+        if matches!(socket.status(), SocketStatus::Connected) {
+            if i == 10 {
+                socket.send_data(b"HELLOFROMCLIENT1").unwrap();
+            } else if i == 450 {
+                socket.end();
+            }
         }
 
         for event in socket.drain_events() {

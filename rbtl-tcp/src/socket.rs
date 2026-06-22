@@ -3,12 +3,14 @@ use byteorder::{BigEndian, ByteOrder};
 use std::{
     io::{Error as IoError, ErrorKind as IoErrorKind, Read, Write},
     sync::{Arc, OnceLock},
-    cell::UnsafeCell,
     time::Duration,
     net::{SocketAddr, TcpStream, ToSocketAddrs}, time::Instant
 };
 
-use crate::{SeqId, ingester::{Ingester, IngesterResult}, Error, ping_tracker::PingTracker};
+use crate::{
+    SeqId, ingester::{Ingester, IngesterResult}, Error, ping_tracker::PingTracker,
+    darkmagic::SyncUnsafeCell
+};
 
 #[derive(Clone, Debug)]
 pub struct SocketConfig {
@@ -59,10 +61,14 @@ impl SocketStatus {
     pub fn is_connected(&self) -> bool {
         matches!(self, SocketStatus::Connected)
     }
+
+    pub fn is_over(&self) -> bool {
+        !matches!(self, SocketStatus::Connected | SocketStatus::Connecting)
+    }
 }
 
 pub struct Socket {
-    pub (crate) tcp_stream: Arc<UnsafeCell<OnceLock<TcpStream>>>,
+    pub (crate) tcp_stream: Arc<OnceLock<SyncUnsafeCell<Result<TcpStream, IoError>>>>,
     ingester: Ingester,
     out_seq_id: SeqId,
     last_ok_seq_id: Option<SeqId>,
@@ -97,8 +103,8 @@ impl Socket {
         Self::prepare_tcp_stream(&tcp_stream);
         let peer_addr = tcp_stream.peer_addr().unwrap();
         let lock = OnceLock::new();
-        let _r = lock.set(tcp_stream);
-        let tcp_stream = Arc::new(UnsafeCell::new(lock));
+        let _r = lock.set(SyncUnsafeCell::new(Ok(tcp_stream)));
+        let tcp_stream = Arc::new(lock);
         let now = Instant::now();
         Self {
             peer_addr,
@@ -115,10 +121,34 @@ impl Socket {
         }
     }
 
-    /// Create a connection connecting the remote.
-    /// 
-    /// Unlike `TcpStream`, this wil lreturn immediatly, you must listen to SocketEvent to know whether or not
-    /// this socket is connected.
+    pub fn from_addr(socket_addr: SocketAddr) -> Self {
+        let tcp_stream_lock = Arc::new(OnceLock::new());
+        let peer_addr = socket_addr.clone();
+        let lock = Arc::clone(&tcp_stream_lock);
+        std::thread::spawn(move || {
+            let tcp_stream = TcpStream::connect_timeout(&socket_addr, Self::TIMEOUT_DURATION_DEFAULT);
+            if let Ok(tcp_stream) = &tcp_stream {
+                Self::prepare_tcp_stream(&tcp_stream);
+            }
+            let _r = lock.set(SyncUnsafeCell::new(tcp_stream));
+        });
+        let now = Instant::now();
+        Self {
+            peer_addr: peer_addr,
+            tcp_stream: tcp_stream_lock,
+            out_seq_id: 0,
+            last_ok_seq_id: None,
+            ping_tracker: PingTracker::new(),
+            config: SocketConfig::new(),
+            ingester: Ingester::new(),
+            last_recv_heartbeat: now,
+            last_sent_heartbeat: now,
+            status: SocketStatus::Connecting,
+            events: Vec::new(),
+        }
+    }
+
+    /// Create a connection connecting the remote, blocking until we are connected.
     pub fn new_blocking<A: ToSocketAddrs>(remote_addr: A) -> Result<Self, Error> {
         let remote_addr = remote_addr.to_socket_addrs()
             .map_err(|e| Error::from_cause(format!("unable to get socket addr"), e))?
@@ -129,21 +159,30 @@ impl Socket {
         Ok(Self::new_from_tcp_stream(tcp_stream))
     }
 
+    /// Create a connecting state that returns immediatly, and is updated to Connected or Timeout depending
+    /// on if the connection is a success
+    pub fn new<A: ToSocketAddrs>(remote_addr: A) -> Result<Self, Error> {
+        let remote_addr = remote_addr.to_socket_addrs()
+            .map_err(|e| Error::from_cause(format!("unable to get socket addr"), e))?
+            .next()
+            .ok_or_else(|| Error::new(format!("unable to get socket addr")))?;
+        Ok(Self::from_addr(remote_addr))
+    }
+
     pub fn raw(&self) -> Option<&TcpStream> {
-        let ptr = self.tcp_stream.get();
-        if let Some(tcp_stream) = unsafe { (*ptr).get() } {
-            Some(&tcp_stream)
+        // safety: this is safe as long as we never `take` the value from the lock
+        if let Some(Ok(tcp_stream)) = self.tcp_stream.get().map(|ptr| unsafe { &*ptr.get() }) {
+            Some(tcp_stream)
         } else {
             None
         }
     }
 
     /// borrow checker purposes
-    fn stream_raw_mut(lock: &mut Arc<UnsafeCell<OnceLock<TcpStream>>>) -> Option<&mut TcpStream> {
-        let ptr = lock.get();
+    fn stream_raw_mut(lock: &mut Arc<OnceLock<SyncUnsafeCell<Result<TcpStream, IoError>>>>) -> Option<&mut TcpStream> {
         // safety: this is safe as long as we never `take` the value from the lock
-        if let Some(tcp_stream) = unsafe { (*ptr).get_mut() } {
-            Some(unsafe { &mut *(tcp_stream as *mut TcpStream) })
+        if let Some(Ok(tcp_stream)) = lock.get().map(|ptr| unsafe { &mut *ptr.get() }) {
+            Some(tcp_stream)
         } else {
             None
         }
@@ -153,32 +192,26 @@ impl Socket {
         Self::stream_raw_mut(&mut self.tcp_stream)
     }
 
-    /// Receives a single call of tcp socket read and stores it in the ingester
-    fn recv_single(&mut self) -> Result<(), IoError> {
-        let mut buf = [0; 2048];
-        let Some(tcp_stream) = self.raw_mut() else {
-            return Ok(())
-        };
-        let size = tcp_stream.read(&mut buf)?;
-        if size == 0 {
-            return Err(IoError::new(IoErrorKind::ConnectionReset, "end of stream"));
-        }
-        self.ingester.take_bytes(&buf[0..size], self.config.max_msg_len);
-        Ok(())
-    }
-
     /// Processes tcp read calls until the receiving tcp queue is empty
     fn recv_all(&mut self) -> Result<(), std::io::Error> {
+        let mut buf = [0; 2048];
+        let Some(tcp_stream) = Self::stream_raw_mut(&mut self.tcp_stream) else {
+            return Ok(())
+        };
         loop {
-            match self.recv_single() {
-                Ok(()) => { continue },
+            let size = match tcp_stream.read(&mut buf) {
+                Ok(size) if size == 0 => {
+                    return Err(IoError::new(IoErrorKind::ConnectionReset, "end of stream"));
+                },
+                Ok(size) => size,
                 Err(e) => {
                     match e.kind() {
                         IoErrorKind::WouldBlock => { return Ok(()) },
-                        _ => return Err(e),
+                        _ => { return Err(e) }
                     }
                 }
-            }
+            };
+            self.ingester.take_bytes(&buf[0..size], self.config.max_msg_len);
         }
     }
 
@@ -206,15 +239,15 @@ impl Socket {
     }
 
     fn set_status(&mut self, new_status: SocketStatus) {
-        if !new_status.is_connected() {
+        if new_status.is_over() {
             if let SocketStatus::Error(err) = &new_status {
                 log::error!("conn with peer {} error: {}", self.peer_addr, err)
             } else {
                 log::info!("disconnected from {}: {:?}", self.peer_addr, new_status);
             }
         }
-        if new_status.is_connected() || self.status.is_connected() {
-            // if either the new or old status is connected, update the events. Otherwise do nothing.
+        if !new_status.is_over() || !self.status.is_over() {
+            // if either the new or old status is not "over", update the events.
             // this prevents Timeout from being overwritten by RemoteEnded, or LocalEnded overwritten by RemoteEnded...
             self.events.push(SocketEvent::Status(new_status.clone()));
             self.status = new_status;
@@ -267,7 +300,31 @@ impl Socket {
         }
     }
 
+    /// If we are in the connecting state, check whether or not the tcp_stream has been updated from the other thread
+    ///
+    /// If it has been updated, then update the status accordingly
+    fn maybe_update_connecting(&mut self) {
+        if !matches!(self.status, SocketStatus::Connecting) {
+            return;
+        }
+        // safety: this is safe as long as we never `take` the value from the lock
+        match self.tcp_stream.get().map(|ptr| unsafe { &*ptr.get() }) {
+            None => { /* not ready yet */},
+            Some(Ok(_tcp_stream)) => { self.set_status(SocketStatus::Connected) },
+            Some(Err(err)) => {
+                match err.kind() {
+                    IoErrorKind::TimedOut => self.set_status(SocketStatus::Timeout),
+                    _ => {
+                        let err = Error::new(format!("unable to connect: {}", err));
+                        self.set_status(SocketStatus::Error(err));
+                    },
+                }
+            }
+        }
+    }
+
     pub fn process(&mut self) {
+        self.maybe_update_connecting();
         let r = self.recv_all();
         let now = Instant::now();
         self.process_ingester_results(now);
