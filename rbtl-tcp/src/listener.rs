@@ -63,7 +63,7 @@ impl Listener {
 
     fn process_all_incoming(&mut self) {
         while let Ok((stream, peer_addr)) = self.tcp_listener.accept() {
-            let mut socket = Socket::new_from_tcp_stream(stream);
+            let mut socket = Socket::new_from_tcp_stream(stream, self.socket_config.clone());
             socket.config = self.socket_config.clone();
             log::info!("received incoming connection from {:?}", peer_addr);
             socket.insert_event(SocketEvent::Status(SocketStatus::Connected));

@@ -3,7 +3,6 @@
 macro_rules! _rbtl_structs_impl {
     ( $([$name:ident, $struct:ty] $(,)* )* ) => {
         paste::paste! {
-            
             pub struct RBTLListener {
                 pub $( [<$name:snake>] : $struct ,)*
             }
@@ -13,14 +12,22 @@ macro_rules! _rbtl_structs_impl {
             }
 
             /// a ConnectInfo that can only be serialized
+            #[derive(Clone)]
             pub struct RBTLConnectInfo {
                 pub $( [<$name:snake>] : Result<<$struct as $crate::Server>::ConnectInfo, ()> ,)*
             }
 
             /// a ConnectInfoParsed that can only be deserialized, using the same payload as ConnectInfo's ser payload
+            #[derive(Clone)]
             pub struct RBTLConnectInfoParsed {
                 pub $( [<$name:snake>] : Option<<$struct as $crate::Server>::ConnectInfo> ,)*
                 pub unknown: Vec<(u8, Box<[u8]>)>,
+            }
+
+            /// a ConnectInfo that can only be serialized
+            #[derive(Clone)]
+            pub struct RBTLConnectOptions {
+                pub $( [<$name:snake>] : <<$struct as $crate::Server>::ConnectingClient as $crate::Client>::ConnectOptions ,)*
             }
 
             #[derive(Clone, Debug)]
@@ -38,6 +45,23 @@ macro_rules! _rbtl_structs_impl {
                 $( $name(<<$struct as $crate::Server>::ConnectingClient as $crate::Client>::ClientConfig ),)*
             }
         }
+
+        /// A struct to help you connect to a remote.
+        ///
+        /// Will try all the possible ways to connect to this remote, and if none of them are available
+        /// it will output an error
+        
+        pub struct RBTLConnector {
+            pub connect_info: RBTLConnectInfoParsed,
+            pub options: RBTLConnectOptions,
+            pub client: RBTLClient,
+        }
+
+        // impl RBTLConnector {
+        //     pub fn new(connect_info_parsed: RBTLConnectInfoParsed, options: RBTLConnectOptions) -> Self {
+                
+        //     }
+        // }
 
         #[derive(Clone, Copy, Debug)]
         pub enum RBTLProtocolKind {

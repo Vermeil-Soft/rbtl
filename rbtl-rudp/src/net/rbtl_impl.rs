@@ -39,6 +39,7 @@ fn map_event(socket_event: SocketEvent) -> Option<Event> {
 
 impl Client for Socket {
     type ClientConfig = SocketConfig;
+    type ConnectOptions = SocketConfig;
     type StateError = Error;
     type SendError = PacketSendError;
     type Init = (Option<SocketAddr>, Option<UdpSocket>);
@@ -62,14 +63,14 @@ impl Client for Socket {
         self.drain_events().filter_map(map_event)
     }
 
-    fn new<I: Into<Self::Init>>(init: I) -> Result<Self, Self::StateError> where Self: Sized {
+    fn new<I: Into<Self::Init>>(init: I, options: SocketConfig) -> Result<Self, Self::StateError> where Self: Sized {
 
         let (socket_addr, udp_socket) = init.into();
         let socket_addr = socket_addr.unwrap_or(SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 0));
         if let Some(socket) = udp_socket {
-            Socket::connect_with_socket(socket, socket_addr)
+            Socket::connect_with_socket(socket, socket_addr, options)
         } else {
-            Socket::connect(socket_addr)
+            Socket::connect(socket_addr, options)
         }
     }
 

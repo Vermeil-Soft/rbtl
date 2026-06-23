@@ -384,7 +384,7 @@ impl SocketCommon<SocketKindShared> {
 
 impl SocketCommon<SocketKindUnique> {
     /// See `connect`, but provide the UDP socket instead of creating it
-    pub fn connect_with_socket(udp_socket: UdpSocket, remote_addr: SocketAddr) -> Result<Socket, Error> {
+    pub fn connect_with_socket(udp_socket: UdpSocket, remote_addr: SocketAddr, options: SocketConfig) -> Result<Socket, Error> {
         let udp_socket = Arc::new(udp_socket);
         crate::os::prepare_socket(&udp_socket);
         udp_socket.set_nonblocking(true)
@@ -405,7 +405,7 @@ impl SocketCommon<SocketKindUnique> {
             cached_now: now,
             last_received_message: now,
 
-            config: SocketConfig::new(),
+            config: options,
             _phantom: PhantomData,
             unknown_messages: Default::default(),
         };
@@ -427,20 +427,20 @@ impl SocketCommon<SocketKindUnique> {
     /// * The remote answered SynAck, and we set the status as "Connected"
     /// * The remote did not answer, and we will get a timeout
     // If you want to accept a new connection, use `new_incoming` instead.
-    pub fn connect<A: ToSocketAddrs>(remote_addr: A) -> Result<Socket, Error> {
+    pub fn connect<A: ToSocketAddrs>(remote_addr: A, options: SocketConfig) -> Result<Socket, Error> {
         let socket = UdpSocket::bind("0.0.0.0:0")
             .map_err(|e| Error::from_cause(format!("could not bind udp socket"), e))?;
         let remote_addr = remote_addr.to_socket_addrs()
             .map_err(|e| Error::from_cause(format!("no target addr found"), e))?
             .next()
             .ok_or_else(|| Error::new(format!("no target addr found")))?;
-        Self::connect_with_socket(socket, remote_addr)
+        Self::connect_with_socket(socket, remote_addr, options)
     }
 
-    pub fn from_connect_info(connect_info: ConnectInfo) -> Result<Socket, Error> {
+    pub fn from_connect_info(connect_info: ConnectInfo, options: SocketConfig) -> Result<Socket, Error> {
         let socket = UdpSocket::bind("0.0.0.0:0")
             .map_err(|e| Error::from_cause(format!("could not bind udp socket"), e))?;
-        Self::connect_with_socket(socket, connect_info.addr)
+        Self::connect_with_socket(socket, connect_info.addr, options)
     }
 
     /// Internal processing for this single source

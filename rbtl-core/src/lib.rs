@@ -24,12 +24,14 @@ pub enum Status {
 pub trait Client {
     type ClientConfig: Clone + Debug;
     type Init;
+    type ConnectOptions: Default + Clone + Debug;
     type SendOptions;
     type SendError;
     type StateError: Error;
     type MessageId;
 
-    fn new<I: Into<Self::Init>>(init: I) -> Result<Self, Self::StateError> where Self: Sized;
+    /// Create a new client for this connection type.
+    fn new<I: Into<Self::Init>>(init: I, options: Self::ConnectOptions) -> Result<Self, Self::StateError> where Self: Sized;
 
     fn set_config(&mut self, config: Self::ClientConfig);
 

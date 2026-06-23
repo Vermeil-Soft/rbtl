@@ -66,6 +66,17 @@ impl SocketConfig {
             transfer_unknown_raw: Self::DEFAULT_TRANSFER_UNKNOWN_RAW,
         }
     }
+
+    pub fn with_timeout(mut self, timeout_ms: u64) -> Self {
+        self.timeout_delay = Duration::from_millis(timeout_ms);
+        self
+    }
+}
+
+impl Default for SocketConfig {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 #[derive(Debug, Clone, Copy)]

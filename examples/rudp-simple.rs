@@ -45,9 +45,9 @@ fn main_server() -> Result<(), Box<dyn std::error::Error>> {
 
 fn main_client(arg1: Option<String>) -> Result<(), Box<dyn std::error::Error>> {
     let mut client = if let Some(addr) = arg1 {
-        Socket::connect(&format!("{}:50000", addr)).unwrap()
+        Socket::connect(&format!("{}:50000", addr), Default::default()).unwrap()
     } else {
-        Socket::connect("127.0.0.1:50000").unwrap()
+        Socket::connect("127.0.0.1:50000", Default::default()).unwrap()
     };
 
     let mut connected = false;

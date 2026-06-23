@@ -47,8 +47,9 @@ impl From<TcpStream> for SocketInit {
 }
 
 impl Client for Socket {
-    type ClientConfig = ();
+    type ClientConfig = SocketConfig;
     type StateError = Error;
+    type ConnectOptions = SocketConfig;
     type SendError = Error;
     type Init = SocketInit;
     type MessageId = u32;
@@ -59,10 +60,11 @@ impl Client for Socket {
     }
 
     fn get_config(&self) -> Self::ClientConfig {
-        ()
+        self.config.clone()
     }
 
-    fn set_config(&mut self, _config: Self::ClientConfig) {
+    fn set_config(&mut self, config: Self::ClientConfig) {
+        self.config = config;
     }
 
     /// Drain events aside from the "raw" ones.
@@ -70,10 +72,10 @@ impl Client for Socket {
         self.drain_events().filter_map(map_event)
     }
 
-    fn new<I: Into<Self::Init>>(init: I) -> Result<Self, Self::StateError> where Self: Sized {
+    fn new<I: Into<Self::Init>>(init: I, options: SocketConfig) -> Result<Self, Self::StateError> where Self: Sized {
         match init.into() {
-            SocketInit::Addr(addr) => Socket::new_blocking(&*addr),
-            SocketInit::Stream(stream) => Ok(Socket::new_from_tcp_stream(stream)),
+            SocketInit::Addr(addr) => Socket::new(&*addr, options),
+            SocketInit::Stream(stream) => Ok(Socket::new_from_tcp_stream(stream, options)),
         }
     }
 

@@ -20,12 +20,24 @@ pub struct SocketConfig {
 
 impl SocketConfig {
     pub const MAX_MSG_LEN: u32 = 1024 * 1024;
+    pub const TIMEOUT_DURATION_MS_DEFAULT: u64 = 5000;
 
     pub fn new() -> Self {
         Self {
             max_msg_len: Self::MAX_MSG_LEN,
-            timeout_ms: Socket::TIMEOUT_DURATION_DEFAULT_MS,
+            timeout_ms: Self::TIMEOUT_DURATION_MS_DEFAULT,
         }
+    }
+
+    pub fn with_timeout(mut self, timeout_ms: u64) -> Self {
+        self.timeout_ms = timeout_ms;
+        self
+    }
+}
+
+impl Default for SocketConfig {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -89,17 +101,13 @@ pub (crate) const MSG_TYPE_DATA_HEAD_LEN: usize = 8;
 pub (crate) const MSG_TYPE_STATUS_HEAD_LEN: usize = 4;
 
 impl Socket {
-    pub const TIMEOUT_DURATION_DEFAULT_MS: u64 = 5000;
-    pub const TIMEOUT_DURATION_DEFAULT: Duration = Duration::from_millis(Self::TIMEOUT_DURATION_DEFAULT_MS);
 
     pub (crate) fn prepare_tcp_stream(tcp_stream: &TcpStream) {
         let _r = tcp_stream.set_nodelay(true);
         let _r = tcp_stream.set_nonblocking(true);
-        let _r = tcp_stream.set_read_timeout(Some(Self::TIMEOUT_DURATION_DEFAULT));
-        let _r = tcp_stream.set_write_timeout(Some(Self::TIMEOUT_DURATION_DEFAULT));
     }
 
-    pub fn new_from_tcp_stream(tcp_stream: TcpStream) -> Self {
+    pub fn new_from_tcp_stream(tcp_stream: TcpStream, options: SocketConfig) -> Self {
         Self::prepare_tcp_stream(&tcp_stream);
         let peer_addr = tcp_stream.peer_addr().unwrap();
         let lock = OnceLock::new();
@@ -112,7 +120,7 @@ impl Socket {
             out_seq_id: 0,
             last_ok_seq_id: None,
             ping_tracker: PingTracker::new(),
-            config: SocketConfig::new(),
+            config: options,
             ingester: Ingester::new(),
             last_recv_heartbeat: now,
             last_sent_heartbeat: now,
@@ -121,12 +129,12 @@ impl Socket {
         }
     }
 
-    pub fn from_addr(socket_addr: SocketAddr) -> Self {
+    pub fn from_addr(socket_addr: SocketAddr, options: SocketConfig) -> Self {
         let tcp_stream_lock = Arc::new(OnceLock::new());
         let peer_addr = socket_addr.clone();
         let lock = Arc::clone(&tcp_stream_lock);
         std::thread::spawn(move || {
-            let tcp_stream = TcpStream::connect_timeout(&socket_addr, Self::TIMEOUT_DURATION_DEFAULT);
+            let tcp_stream = TcpStream::connect_timeout(&socket_addr, Duration::from_millis(options.timeout_ms));
             if let Ok(tcp_stream) = &tcp_stream {
                 Self::prepare_tcp_stream(&tcp_stream);
             }
@@ -149,24 +157,24 @@ impl Socket {
     }
 
     /// Create a connection connecting the remote, blocking until we are connected.
-    pub fn new_blocking<A: ToSocketAddrs>(remote_addr: A) -> Result<Self, Error> {
+    pub fn new_blocking<A: ToSocketAddrs>(remote_addr: A, options: SocketConfig) -> Result<Self, Error> {
         let remote_addr = remote_addr.to_socket_addrs()
             .map_err(|e| Error::from_cause(format!("unable to get socket addr"), e))?
             .next()
             .ok_or_else(|| Error::new(format!("unable to get socket addr")))?;
-        let tcp_stream = TcpStream::connect_timeout(&remote_addr, Self::TIMEOUT_DURATION_DEFAULT)
+        let tcp_stream = TcpStream::connect_timeout(&remote_addr, Duration::from_millis(options.timeout_ms))
             .map_err(|e| Error::from_cause(format!("unable to connect to {}", remote_addr), e))?;
-        Ok(Self::new_from_tcp_stream(tcp_stream))
+        Ok(Self::new_from_tcp_stream(tcp_stream, options))
     }
 
     /// Create a connecting state that returns immediatly, and is updated to Connected or Timeout depending
     /// on if the connection is a success
-    pub fn new<A: ToSocketAddrs>(remote_addr: A) -> Result<Self, Error> {
+    pub fn new<A: ToSocketAddrs>(remote_addr: A, options: SocketConfig) -> Result<Self, Error> {
         let remote_addr = remote_addr.to_socket_addrs()
             .map_err(|e| Error::from_cause(format!("unable to get socket addr"), e))?
             .next()
             .ok_or_else(|| Error::new(format!("unable to get socket addr")))?;
-        Ok(Self::from_addr(remote_addr))
+        Ok(Self::from_addr(remote_addr, options))
     }
 
     pub fn raw(&self) -> Option<&TcpStream> {
