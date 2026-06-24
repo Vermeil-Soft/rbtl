@@ -230,6 +230,7 @@ dependencies = [
 name = "rbtl"
 version = "0.1.0"
 dependencies = [
+ "log",
  "paste",
  "rbtl-core",
  "rbtl-rudp",

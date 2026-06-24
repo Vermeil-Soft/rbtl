@@ -47,6 +47,7 @@ impl From<TcpStream> for SocketInit {
 }
 
 impl Client for Socket {
+    type Server = Listener;
     type ClientConfig = SocketConfig;
     type StateError = Error;
     type ConnectOptions = SocketConfig;
@@ -77,6 +78,11 @@ impl Client for Socket {
             SocketInit::Addr(addr) => Socket::new(&*addr, options),
             SocketInit::Stream(stream) => Ok(Socket::new_from_tcp_stream(stream, options)),
         }
+    }
+
+    fn from_connect_info(connect_info: ConnectInfo, options: Self::ConnectOptions) ->
+        Result<Self, Self::StateError> where Self: Sized {
+        Socket::new(connect_info.addr, options)
     }
 
     fn process(&mut self) {

@@ -38,6 +38,7 @@ fn map_event(socket_event: SocketEvent) -> Option<Event> {
 }
 
 impl Client for Socket {
+    type Server = Listener;
     type ClientConfig = SocketConfig;
     type ConnectOptions = SocketConfig;
     type StateError = Error;
@@ -72,6 +73,11 @@ impl Client for Socket {
         } else {
             Socket::connect(socket_addr, options)
         }
+    }
+
+    fn from_connect_info(connect_info: ConnectInfo, options: Self::ConnectOptions) ->
+        Result<Self, Self::StateError> where Self: Sized {
+        Socket::connect(connect_info.addr, options)
     }
 
     fn process(&mut self) {

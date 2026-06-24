@@ -16,6 +16,7 @@ rbtl-rudp = { path = "./rbtl-rudp" }
 rbtl-tcp = { path = "./rbtl-tcp" }
 rbtl-core = { path = "./rbtl-core" }
 
+log = "0.4"
 paste = "^1.0"
 serde = { version = "^1.0", optional = true }
 

@@ -24,6 +24,13 @@ macro_rules! _rbtl_structs_impl {
                 pub unknown: Vec<(u8, Box<[u8]>)>,
             }
 
+            impl RBTLConnectInfoParsed {
+                pub fn num_available(&self) -> usize {
+                    0
+                    $( + if self.[<$name:snake>].is_none() { 0 } else { 1 } )*
+                }
+            }
+
             /// a ConnectInfo that can only be serialized
             #[derive(Clone)]
             pub struct RBTLConnectOptions {
@@ -44,24 +51,98 @@ macro_rules! _rbtl_structs_impl {
             pub enum RBTLClientConfigSingle {
                 $( $name(<<$struct as $crate::Server>::ConnectingClient as $crate::Client>::ClientConfig ),)*
             }
+
+            struct RBTLConnectorInner {
+                pub connect_info: RBTLConnectInfoParsed,
+                pub options: RBTLConnectOptions,
+                pub $( [<$name:snake _done>]: bool,)*
+            }
+
+            /// A struct to help you connect to a remote.
+            ///
+            /// Will try all the possible ways to connect to this remote, and if none of them are available
+            /// it will output an error
+            pub struct RBTLConnector {
+                client: Option<RBTLClient>,
+                inner: RBTLConnectorInner,
+            }
+
+            impl RBTLConnectorInner {
+                fn next(&mut self) -> Option<RBTLClient> {
+                    $(
+                    if !self.[<$name:snake _done>] {
+                        self.[<$name:snake _done>] = true;
+                        if let Some(conn_info) = &self.connect_info.[<$name:snake>] {
+                            let client = <<$struct as $crate::Server>::ConnectingClient as $crate::Client>::from_connect_info(
+                                conn_info.clone(),
+                                self.options.[<$name:snake>].clone()
+                            );
+                            match client {
+                                Ok(client) => return Some(RBTLClient::$name(client)),
+                                Err(e) => {
+                                    log::error!(
+                                        "protocol {} had initialization error: {}",
+                                        <$struct as $crate::Server>::RBTL_PROTOCOL_NAME,
+                                        e
+                                    );
+                                }
+                            }
+                        } else {
+                            log::info!(
+                                "protocol {} not provided in connect_info",
+                                <$struct as $crate::Server>::RBTL_PROTOCOL_NAME
+                            )
+                        }
+                    };
+                    )*
+                    None
+                }
+            }
+
+            impl RBTLConnector {
+                pub fn new(connect_info_parsed: RBTLConnectInfoParsed, options: RBTLConnectOptions) -> Result<Self, $crate::Error> {
+                    let mut inner = RBTLConnectorInner {
+                        connect_info: connect_info_parsed,
+                        options,
+                        $([<$name:snake _done>]: false,)*
+                    };
+                    match inner.next() {
+                        Some(client) => Ok(Self { inner, client: Some(client) }),
+                        None => {
+                            let err = $crate::Error::new(
+                                format!("no rbtl protocols are both available and compatible to connect"
+                            ));
+                            Err(err)
+                        }
+                    }
+                }
+
+                /// Does all the processing and tries to connect with any protocol available in the connector.
+                ///
+                /// You should loop this call regularly until it returns Some; if the inner result is Ok,
+                /// you can then discard this and use the connected client. If the inner result is Err, the
+                /// client couldn't connect no matter the protocol, and the connection is impossible.
+                pub fn attempt_connect(&mut self) -> Option<Result<RBTLClient, $crate::Error>> {
+                    let Some(client) = &mut self.client else {
+                        let n = self.inner.connect_info.num_available();
+                        let err = $crate::Error::new(format!("failed to connect through any of the {} protocols", n));
+                        return Some(Err(err));
+                    };
+                    let _r = client.process();
+                    match client.status() {
+                        $crate::rbtl_core::Status::Connecting => None,
+                        $crate::rbtl_core::Status::Ok => self.client.take().map(|c| Ok(c)),
+                        _ => {
+                            let n = self.inner.connect_info.num_available();
+                            let err = $crate::Error::new(format!("failed to connect through any of the {} protocols", n));
+                            Some(Err(err))
+                        }
+                    }
+                }
+            }
         }
 
-        /// A struct to help you connect to a remote.
-        ///
-        /// Will try all the possible ways to connect to this remote, and if none of them are available
-        /// it will output an error
-        
-        pub struct RBTLConnector {
-            pub connect_info: RBTLConnectInfoParsed,
-            pub options: RBTLConnectOptions,
-            pub client: RBTLClient,
-        }
 
-        // impl RBTLConnector {
-        //     pub fn new(connect_info_parsed: RBTLConnectInfoParsed, options: RBTLConnectOptions) -> Self {
-                
-        //     }
-        // }
 
         #[derive(Clone, Copy, Debug)]
         pub enum RBTLProtocolKind {

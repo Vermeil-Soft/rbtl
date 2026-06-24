@@ -22,6 +22,7 @@ pub enum Status {
 }
 
 pub trait Client {
+    type Server: Server;
     type ClientConfig: Clone + Debug;
     type Init;
     type ConnectOptions: Default + Clone + Debug;
@@ -32,6 +33,9 @@ pub trait Client {
 
     /// Create a new client for this connection type.
     fn new<I: Into<Self::Init>>(init: I, options: Self::ConnectOptions) -> Result<Self, Self::StateError> where Self: Sized;
+
+    fn from_connect_info(connect_info: <Self::Server as Server>::ConnectInfo, options: Self::ConnectOptions) ->
+        Result<Self, Self::StateError> where Self: Sized;
 
     fn set_config(&mut self, config: Self::ClientConfig);
 
