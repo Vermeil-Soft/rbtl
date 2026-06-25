@@ -15,6 +15,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 fn main_server() -> Result<(), Box<dyn std::error::Error>> {
     let mut server = Listener::new("0.0.0.0:50000").expect("Failed to create server");
     let mut remote_id: Option<SocketIdentity> = None;
+    println!("Starting server");
 
     let really_big_message: Vec<u8> = (0..65536).map(|v| (v % 256) as u8).collect();
     let really_big_message: Arc<[u8]> = Arc::from(really_big_message.into_boxed_slice());
@@ -49,6 +50,7 @@ fn main_client(arg1: Option<String>) -> Result<(), Box<dyn std::error::Error>> {
     } else {
         Socket::connect("127.0.0.1:50000", Default::default()).unwrap()
     };
+    println!("Starting client");
 
     let mut connected = false;
 
@@ -57,6 +59,9 @@ fn main_client(arg1: Option<String>) -> Result<(), Box<dyn std::error::Error>> {
 
     for _frame in 0..5000 {
         client.process()?;
+        if _frame % 50 == 0 {
+            println!("(Status: {:?})", client.status());
+        }
 
         if connected && _frame % 100 == 0 {
             let _r = client.send_data(Arc::clone(&really_big_message), Default::default());

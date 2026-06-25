@@ -53,7 +53,6 @@ impl Client for Socket {
     type ConnectOptions = SocketConfig;
     type SendError = Error;
     type Init = SocketInit;
-    type MessageId = u32;
     type SendOptions = ();
 
     fn status(&self) -> Status {
@@ -93,7 +92,11 @@ impl Client for Socket {
         self.avg_ping(seconds)
     }
 
-    fn send<B>(&mut self, bytes: B, _send_opts: Self::SendOptions) -> Result<Self::MessageId, Self::SendError>
+    fn is_msg_received(&self, msg_id: &u32) -> Result<bool, ()> {
+        Ok(self.is_seq_id_received(*msg_id))
+    }
+
+    fn send<B>(&mut self, bytes: B, _send_opts: Self::SendOptions) -> Result<u32, Self::SendError>
             where B: Into<Arc<[u8]>> + AsRef<[u8]> + Clone {
         self.send_data(bytes)
     }
@@ -105,6 +108,10 @@ impl ServClient for Socket {
     fn send<B: Into<Arc<[u8]>> + AsRef<[u8]> + Clone>(&mut self, bytes: B, _send_opts: ()) 
             -> Result<<Self::Server as Server>::MessageId, <Self::Server as Server>::SendError> {
         self.send_data(bytes)
+    }
+
+    fn is_msg_received(&self, msg_id: &u32) -> Result<bool, ()> {
+        Ok(self.is_seq_id_received(*msg_id))
     }
 
     fn ping(&self, seconds: f32) -> Option<f32> {

@@ -1,13 +1,14 @@
 //! Trait used by the RBTL implementors
 
-use std::{error::Error, sync::Arc, fmt::Debug};
+use std::{error::Error, fmt::Debug, hash::Hash, sync::Arc};
 
+#[derive(Debug)]
 pub enum Event {
     Data(Box<[u8]>),
     StatusChanged(Status),
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum Status {
     /// Trying to connect to the other party, cannot send data yet
     Connecting,
@@ -21,15 +22,25 @@ pub enum Status {
     Error(Arc<dyn std::error::Error>),
 }
 
+impl Status {
+    pub fn is_ok(&self) -> bool {
+        matches!(self, Self::Ok)
+    }
+
+    /// Is the connection over, as in are we not "connecting" nor "connected"
+    pub fn is_conn_over(&self) -> bool {
+        matches!(self, Self::Timeout | Self::Ended { .. } | Self::Error(_))
+    }
+}
+
 pub trait Client {
     type Server: Server;
     type ClientConfig: Clone + Debug;
     type Init;
-    type ConnectOptions: Default + Clone + Debug;
-    type SendOptions;
+    type ConnectOptions: Debug + Default + Clone;
+    type SendOptions: Debug + Default + Clone;
     type SendError;
     type StateError: Error;
-    type MessageId;
 
     /// Create a new client for this connection type.
     fn new<I: Into<Self::Init>>(init: I, options: Self::ConnectOptions) -> Result<Self, Self::StateError> where Self: Sized;
@@ -43,10 +54,14 @@ pub trait Client {
 
     fn status(&self) -> Status;
 
-    fn send<B>(&mut self, bytes: B, send_opts: Self::SendOptions) -> Result<Self::MessageId, Self::SendError>
+    fn send<B>(&mut self, bytes: B, send_opts: Self::SendOptions) -> Result<<Self::Server as Server>::MessageId, Self::SendError>
         where B: Into<Arc<[u8]>> + AsRef<[u8]> + Clone;
 
-    // fn error(&self) -> Option<Self::StateError>;
+    /// Fetches whether a sent message has been received by the remote
+    /// 
+    /// Returns either true or false for if the message has been received, or an error (if the operation
+    /// is not supported, if the given msg_id is invalid, etc)
+    fn is_msg_received(&self, msg_id: &<Self::Server as Server>::MessageId) -> Result<bool, ()>;
 
     /// Returns the average ping over the duration in milliseconds
     fn ping(&self, seconds: f32) -> Option<f32>;
@@ -61,6 +76,8 @@ pub trait ServClient {
 
     fn send<B: Into<Arc<[u8]>> + AsRef<[u8]> + Clone>(&mut self, bytes: B, send_options: <Self::Server as Server>::SendOptions)
         -> Result<<Self::Server as Server>::MessageId, <Self::Server as Server>::SendError>;
+
+    fn is_msg_received(&self, msg_id: &<Self::Server as Server>::MessageId) -> Result<bool, ()>;
 
     /// Returns the average ping over the duration in milliseconds
     fn ping(&self, seconds: f32) -> Option<f32>;
@@ -77,7 +94,7 @@ pub trait Server {
     const RBTL_PROTOCOL_ID: u8;
     const RBTL_PROTOCOL_NAME: &str;
 
-    type Key: Clone;
+    type Key: Debug + Clone + Hash + PartialEq + Eq;
     type Init;
     type ServerConfig: Clone + Debug;
     type ServClient: ServClient;
@@ -87,7 +104,7 @@ pub trait Server {
     type StateError: Error;
     // struct to indicate how to connect to this listener
     type ConnectInfo: Clone + for <'a> TryFrom<&'a [u8]> + TryInto<Vec<u8>>;
-    type MessageId;
+    type MessageId: Debug + Clone + PartialOrd + PartialEq + Eq;
 
     /// Create a server/listener with a custom init payload, such as the port to choose, etc
     fn new_with<I: Into<Self::Init>>(init: I) -> Result<Self, Self::StateError> where Self: Sized;

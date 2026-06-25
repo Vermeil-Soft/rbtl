@@ -44,7 +44,6 @@ impl Client for Socket {
     type StateError = Error;
     type SendError = PacketSendError;
     type Init = (Option<SocketAddr>, Option<UdpSocket>);
-    type MessageId = u32;
     type SendOptions = PacketSendOptions;
 
     fn status(&self) -> Status {
@@ -88,7 +87,11 @@ impl Client for Socket {
         self.avg_ping(seconds)
     }
 
-    fn send<B>(&mut self, bytes: B, send_opts: Self::SendOptions) -> Result<Self::MessageId, Self::SendError>
+    fn is_msg_received(&self, msg_id: &u32) -> Result<bool, ()> {
+        self.is_seq_id_received(*msg_id)
+    }
+
+    fn send<B>(&mut self, bytes: B, send_opts: Self::SendOptions) -> Result<u32, Self::SendError>
             where B: Into<Arc<[u8]>> + AsRef<[u8]> + Clone {
         self.send_data(bytes, send_opts)
     }
@@ -100,6 +103,10 @@ impl ServClient for SocketShared {
     fn send<B: Into<Arc<[u8]>> + AsRef<[u8]> + Clone>(&mut self, bytes: B, send_opts: <Self::Server as Server>::SendOptions)
             -> Result<<Self::Server as Server>::MessageId, <Self::Server as Server>::SendError> {
         self.send_data(bytes, send_opts)
+    }
+
+    fn is_msg_received(&self, msg_id: &u32) -> Result<bool, ()> {
+        self.is_seq_id_received(*msg_id)
     }
 
     fn ping(&self, seconds: f32) -> Option<f32> {

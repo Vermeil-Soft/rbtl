@@ -7,24 +7,35 @@ macro_rules! _rbtl_structs_impl {
                 pub $( [<$name:snake>] : $struct ,)*
             }
 
+            #[derive(Debug, Clone, Default)]
             pub struct RBTLSendOptions {
                 pub $( [<$name:snake>] : <$struct as $crate::Server>::SendOptions ,)*
             }
 
-            /// a ConnectInfo that can only be serialized
+            /// a ConnectInfo that can only be serialized, craeted by the server and meant to be sent to clients
             #[derive(Clone)]
             pub struct RBTLConnectInfo {
                 pub $( [<$name:snake>] : Result<<$struct as $crate::Server>::ConnectInfo, ()> ,)*
             }
 
-            /// a ConnectInfoParsed that can only be deserialized, using the same payload as ConnectInfo's ser payload
+            /// a ConnectInfo that is meant to be used by a client, that can only be deserialized, using the same
+            /// payload as ConnectInfo's ser payload
             #[derive(Clone)]
-            pub struct RBTLConnectInfoParsed {
+            pub struct RBTLClientConnectInfo {
                 pub $( [<$name:snake>] : Option<<$struct as $crate::Server>::ConnectInfo> ,)*
                 pub unknown: Vec<(u8, Box<[u8]>)>,
             }
 
-            impl RBTLConnectInfoParsed {
+            impl From<&RBTLConnectInfo> for RBTLClientConnectInfo {
+                fn from(v: &RBTLConnectInfo) -> Self {
+                    Self {
+                        $( [<$name:snake>]: v.[<$name:snake>].as_ref().ok().cloned(), )*
+                        unknown: vec![]
+                    }
+                }
+            }
+
+            impl RBTLClientConnectInfo {
                 pub fn num_available(&self) -> usize {
                     0
                     $( + if self.[<$name:snake>].is_none() { 0 } else { 1 } )*
@@ -32,7 +43,7 @@ macro_rules! _rbtl_structs_impl {
             }
 
             /// a ConnectInfo that can only be serialized
-            #[derive(Clone)]
+            #[derive(Clone, Default)]
             pub struct RBTLConnectOptions {
                 pub $( [<$name:snake>] : <<$struct as $crate::Server>::ConnectingClient as $crate::Client>::ConnectOptions ,)*
             }
@@ -52,8 +63,16 @@ macro_rules! _rbtl_structs_impl {
                 $( $name(<<$struct as $crate::Server>::ConnectingClient as $crate::Client>::ClientConfig ),)*
             }
 
+            #[derive()]
+            pub enum RBTLClientBuilder {
+                $( $name(
+                    <<$struct as $crate::Server>::ConnectingClient as $crate::Client>::Init,
+                    <<$struct as $crate::Server>::ConnectingClient as $crate::Client>::ConnectOptions
+                ),)*
+            }
+
             struct RBTLConnectorInner {
-                pub connect_info: RBTLConnectInfoParsed,
+                pub connect_info: RBTLClientConnectInfo,
                 pub options: RBTLConnectOptions,
                 pub $( [<$name:snake _done>]: bool,)*
             }
@@ -100,9 +119,9 @@ macro_rules! _rbtl_structs_impl {
             }
 
             impl RBTLConnector {
-                pub fn new(connect_info_parsed: RBTLConnectInfoParsed, options: RBTLConnectOptions) -> Result<Self, $crate::Error> {
+                pub fn new(cli_connect_info: RBTLClientConnectInfo, options: RBTLConnectOptions) -> Result<Self, $crate::Error> {
                     let mut inner = RBTLConnectorInner {
-                        connect_info: connect_info_parsed,
+                        connect_info: cli_connect_info,
                         options,
                         $([<$name:snake _done>]: false,)*
                     };
@@ -129,20 +148,19 @@ macro_rules! _rbtl_structs_impl {
                         return Some(Err(err));
                     };
                     let _r = client.process();
-                    match client.status() {
+                    let status = client.status();
+                    match status {
                         $crate::rbtl_core::Status::Connecting => None,
                         $crate::rbtl_core::Status::Ok => self.client.take().map(|c| Ok(c)),
                         _ => {
-                            let n = self.inner.connect_info.num_available();
-                            let err = $crate::Error::new(format!("failed to connect through any of the {} protocols", n));
-                            Some(Err(err))
+                            // if we get an error, go to the next client
+                            self.client = self.inner.next();
+                            self.attempt_connect()
                         }
                     }
                 }
             }
         }
-
-
 
         #[derive(Clone, Copy, Debug)]
         pub enum RBTLProtocolKind {
@@ -156,10 +174,12 @@ macro_rules! _rbtl_structs_impl {
             $( $name(<$struct as $crate::Server>::ConnectingClient), )*
         }
 
+        #[derive(Clone, Debug, Hash, PartialEq, Eq)]
         pub enum RBTLKey {
             $( $name(<$struct as $crate::Server>::Key) ,)*
         }
 
+        #[derive(Clone, Debug, PartialOrd, PartialEq, Eq)]
         pub enum RBTLMessageId {
             $( $name(<$struct as $crate::Server>::MessageId) ,)*
         }
@@ -187,9 +207,18 @@ macro_rules! _rbtl_structs_impl {
         }
 
         paste::paste! {
+            /// A Client structure.
+            ///
+            /// You should probably create it from RBTLConnector, but you can also create it from `new`
             impl RBTLClient {
-                // TODO
-                // pub fn new() -> Self {
+                pub fn new(b: RBTLClientBuilder) -> Result<Self, Box<dyn std::error::Error>> {
+                    match b {
+                        $( RBTLClientBuilder::$name(init, options) => {
+                            let c = <<$struct as $crate::Server>::ConnectingClient as $crate::Client>::new(init, options)?;
+                            Ok(RBTLClient::$name(c))
+                        } ,)*
+                    }
+                }
                 
                 pub fn status(&self) -> $crate::rbtl_core::Status {
                     match self {
@@ -243,6 +272,15 @@ macro_rules! _rbtl_structs_impl {
                     }
                 }
 
+                pub fn is_msg_received(&self, msg_id: &RBTLMessageId) -> Result<bool, ()> {
+                    match (self, msg_id) {
+                        $( (Self::$name(client), RBTLMessageId::$name(id)) => {
+                            <<$struct as $crate::Server>::ConnectingClient as $crate::Client>::is_msg_received(client, id)
+                        },)*
+                        _ => Err(())
+                    }
+                }
+
                 pub fn send<B>(&mut self, bytes: B, send_options: RBTLSendOptions) -> Result<RBTLMessageId, Box<dyn std::error::Error>>
                     where B: Into<std::sync::Arc<[u8]>> + AsRef<[u8]> + Clone {
                     match self {
@@ -283,6 +321,11 @@ macro_rules! _rbtl_structs_impl {
                 }
 
                 #[inline]
+                pub fn is_msg_received(&self, id: &RBTLMessageId) -> Result<bool, ()> {
+                    self.unmut().is_msg_received(id)
+                }
+
+                #[inline]
                 pub fn status(&self) -> $crate::Status {
                     self.unmut().status()
                 }
@@ -304,6 +347,15 @@ macro_rules! _rbtl_structs_impl {
                         $( Self::$name(client) => {
                             <<$struct as $crate::Server>::ServClient as $crate::ServClient>::ping(client, seconds)
                         } ,)*
+                    }
+                }
+
+                pub fn is_msg_received(&self, msg_id: &RBTLMessageId) -> Result<bool, ()> {
+                    match (self, msg_id) {
+                        $( (Self::$name(client), RBTLMessageId::$name(id)) => {
+                            <<$struct as $crate::Server>::ServClient as $crate::ServClient>::is_msg_received(client, id)
+                        },)*
+                        _ => Err(())
                     }
                 }
 
@@ -494,7 +546,7 @@ macro_rules! rbtl_structs {
                 }
             }
 
-            impl<'de> Deserialize<'de> for RBTLConnectInfoParsed {
+            impl<'de> Deserialize<'de> for RBTLClientConnectInfo {
                 fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
                 where
                     D: Deserializer<'de>,
@@ -502,7 +554,7 @@ macro_rules! rbtl_structs {
                     struct ConnectInfoParsedVisitor;
                     
                     impl<'de> Visitor<'de> for ConnectInfoParsedVisitor {
-                        type Value = RBTLConnectInfoParsed;
+                        type Value = RBTLClientConnectInfo;
                         
                         fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
                             formatter.write_str("ConnectInfo")
@@ -528,7 +580,7 @@ macro_rules! rbtl_structs {
                                 }
                             }
                             
-                            Ok(RBTLConnectInfoParsed {
+                            Ok(RBTLClientConnectInfo {
                                 $([<$name:snake>],)*
                                 unknown
                             })
