@@ -70,6 +70,10 @@ impl Listener {
     /// It's often a good idea to have a value like "0.0.0.0:YOUR_PORT",
     /// to bind your address to the internet.
     pub fn new<A: ToSocketAddrs + Display>(local_addr: A) -> Result<Listener, Error> {
+        Self::new_with(local_addr, (SocketConfig::new(), ListenerConfig::new()))
+    }
+
+    pub fn new_with<A: ToSocketAddrs + Display>(local_addr: A, config: (SocketConfig, ListenerConfig)) -> Result<Self, Error> {
         let udp_socket = Arc::new(UdpSocket::bind(&local_addr)
             .map_err(|e| Error::from_cause(format!("failed to bind {}", local_addr), e))?);
 
@@ -79,8 +83,8 @@ impl Listener {
         Ok(Listener {
             remotes: HashMap::default(),
             udp_socket,
-            socket_config: SocketConfig::new(),
-            listener_config: ListenerConfig::new(),
+            socket_config: config.0,
+            listener_config: config.1,
             unknown_messages: Default::default(),
         })
     }

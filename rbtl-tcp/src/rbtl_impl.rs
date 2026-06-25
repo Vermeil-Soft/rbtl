@@ -1,7 +1,5 @@
 use std::{
-    net::{SocketAddr, ToSocketAddrs, TcpStream},
-    sync::Arc,
-    vec::IntoIter
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpStream, ToSocketAddrs}, sync::Arc, vec::IntoIter
 };
 
 use crate::{
@@ -125,7 +123,7 @@ impl ServClient for Socket {
 
 impl Server for Listener {
     const RBTL_PROTOCOL_ID: u8 = 2;
-    const RBTL_PROTOCOL_NAME: &str = "rudp";
+    const RBTL_PROTOCOL_NAME: &str = "tcp";
 
     type ServClient = Socket;
     type Init = Box<dyn ToSocketAddrs<Iter = IntoIter<SocketAddr>>>;
@@ -174,18 +172,28 @@ impl Server for Listener {
     }
 
     fn connect_info(&self) -> Result<Self::ConnectInfo, ()> {
-        let local_addr = self.tcp_listener.local_addr().expect("unable to get local addr");
+        let mut local_addr = self.tcp_listener.local_addr().map_err(|_| ())?;
+        if local_addr.is_ipv4() {
+            local_addr.set_ip(IpAddr::V4(Ipv4Addr::LOCALHOST))
+        } else {
+            local_addr.set_ip(IpAddr::V6(Ipv6Addr::LOCALHOST))
+        }
         Ok(ConnectInfo {
             addr: local_addr
         })
     }
 
-    fn new_with<I: Into<Self::Init>>(init: I) -> Result<Self, Self::StateError> where Self: Sized {
+    fn new<I: Into<Self::Init>>(init: I) -> Result<Self, Self::StateError> where Self: Sized {
         let local_addr = init.into();
         Self::bind(&*local_addr)
     }
 
-    fn new() -> Result<Self, Self::StateError> where Self: Sized {
+    fn new_with<I: Into<Self::Init>>(init: I, config: Self::ServerConfig) -> Result<Self, Self::StateError> where Self: Sized {
+        let local_addr = init.into();
+        Self::bind_with(&*local_addr, config)
+    }
+
+    fn new_defaults() -> Result<Self, Self::StateError> where Self: Sized {
         Self::bind("0.0.0.0:0")
     }
 

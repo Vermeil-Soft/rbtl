@@ -1,6 +1,6 @@
 use std::net::{SocketAddr, SocketAddrV4, SocketAddrV6, Ipv4Addr, Ipv6Addr};
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct ConnectInfo {
     pub addr: SocketAddr
 }

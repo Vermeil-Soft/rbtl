@@ -4,25 +4,25 @@ macro_rules! _rbtl_structs_impl {
     ( $([$name:ident, $struct:ty] $(,)* )* ) => {
         paste::paste! {
             pub struct RBTLListener {
-                pub $( [<$name:snake>] : $struct ,)*
+                $(pub [<$name:snake>] : $struct ,)*
             }
 
             #[derive(Debug, Clone, Default)]
             pub struct RBTLSendOptions {
-                pub $( [<$name:snake>] : <$struct as $crate::Server>::SendOptions ,)*
+                $(pub [<$name:snake>] : <$struct as $crate::Server>::SendOptions ,)*
             }
 
             /// a ConnectInfo that can only be serialized, craeted by the server and meant to be sent to clients
-            #[derive(Clone)]
+            #[derive(Clone, Debug)]
             pub struct RBTLConnectInfo {
-                pub $( [<$name:snake>] : Result<<$struct as $crate::Server>::ConnectInfo, ()> ,)*
+                $(pub [<$name:snake>] : Result<<$struct as $crate::Server>::ConnectInfo, ()> ,)*
             }
 
             /// a ConnectInfo that is meant to be used by a client, that can only be deserialized, using the same
             /// payload as ConnectInfo's ser payload
-            #[derive(Clone)]
+            #[derive(Clone, Debug)]
             pub struct RBTLClientConnectInfo {
-                pub $( [<$name:snake>] : Option<<$struct as $crate::Server>::ConnectInfo> ,)*
+                $(pub [<$name:snake>] : Option<<$struct as $crate::Server>::ConnectInfo> ,)*
                 pub unknown: Vec<(u8, Box<[u8]>)>,
             }
 
@@ -45,17 +45,21 @@ macro_rules! _rbtl_structs_impl {
             /// a ConnectInfo that can only be serialized
             #[derive(Clone, Default)]
             pub struct RBTLConnectOptions {
-                pub $( [<$name:snake>] : <<$struct as $crate::Server>::ConnectingClient as $crate::Client>::ConnectOptions ,)*
+                $(pub [<$name:snake>] : <<$struct as $crate::Server>::ConnectingClient as $crate::Client>::ConnectOptions ,)*
             }
 
             #[derive(Clone, Debug)]
             pub struct RBTLServConfig {
-                pub $( [<$name:snake>] : <$struct as $crate::Server>::ServerConfig,)*
+                $(pub [<$name:snake>] : <$struct as $crate::Server>::ServerConfig,)*
+            }
+
+            pub struct RBTLServInit {
+                $(pub [<$name:snake>] : <$struct as $crate::Server>::Init,)*
             }
 
             #[derive(Clone, Debug)]
             pub struct RBTLClientConfig {
-                pub $( [<$name:snake>] : <<$struct as $crate::Server>::ConnectingClient as $crate::Client>::ClientConfig,)*
+                $(pub [<$name:snake>] : <<$struct as $crate::Server>::ConnectingClient as $crate::Client>::ClientConfig,)*
             }
 
             #[derive(Clone, Debug)]
@@ -74,7 +78,7 @@ macro_rules! _rbtl_structs_impl {
             struct RBTLConnectorInner {
                 pub connect_info: RBTLClientConnectInfo,
                 pub options: RBTLConnectOptions,
-                pub $( [<$name:snake _done>]: bool,)*
+                $(pub [<$name:snake _done>]: bool,)*
             }
 
             /// A struct to help you connect to a remote.
@@ -162,7 +166,7 @@ macro_rules! _rbtl_structs_impl {
             }
         }
 
-        #[derive(Clone, Copy, Debug)]
+        #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
         pub enum RBTLProtocolKind {
             $($name,)*
         }
@@ -403,9 +407,27 @@ macro_rules! _rbtl_structs_impl {
 
             impl RBTLListener {
                 /// Create a listener with sensible defaults for each listener type
-                pub fn new() -> Result<Self, Box<dyn std::error::Error>> {
+                pub fn new_defaults() -> Result<Self, Box<dyn std::error::Error>> {
                     Ok(Self {
-                        $( [<$name:snake>] : <$struct as $crate::rbtl_core::Server>::new()? ,)*
+                        $( [<$name:snake>] : <$struct as $crate::rbtl_core::Server>::new_defaults()? ,)*
+                    })
+                }
+
+                /// Create a listener with custom options for each listener type
+                pub fn new(init: RBTLServInit) -> Result<Self, Box<dyn std::error::Error>> {
+                    Ok(Self {
+                        $( [<$name:snake>] : <$struct as $crate::rbtl_core::Server>::new(
+                            init.[<$name:snake>]
+                        )? ,)*
+                    })
+                }
+
+                /// Create a listener with custom options and server config for each listener type
+                pub fn new_with(init: RBTLServInit, config: RBTLServConfig) -> Result<Self, Box<dyn std::error::Error>> {
+                    Ok(Self {
+                        $( [<$name:snake>] : <$struct as $crate::rbtl_core::Server>::new_with(
+                            init.[<$name:snake>], config.[<$name:snake>]
+                        )? ,)*
                     })
                 }
 

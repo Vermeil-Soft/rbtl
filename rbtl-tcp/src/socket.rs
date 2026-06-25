@@ -288,6 +288,7 @@ impl Socket {
                     self.status = new_status;
                 },
                 IngesterResult::SeqIdOk(seq_id) => {
+                    self.last_ok_seq_id = Some(seq_id);
                     self.ping_tracker.pong(seq_id);
                 }
             }

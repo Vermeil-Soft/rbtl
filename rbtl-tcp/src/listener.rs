@@ -21,6 +21,10 @@ pub struct Listener {
 
 impl Listener {
     pub fn bind<A: ToSocketAddrs>(addr: A) -> Result<Self, Error> {
+        Self::bind_with(addr, Default::default())
+    }
+
+    pub fn bind_with<A: ToSocketAddrs>(addr: A, config: (SocketConfig, ListenerConfig)) -> Result<Self, Error> {
         let remote_addr = addr.to_socket_addrs()
             .map_err(|e| Error::from_cause(format!("no target addr found"), e))?
             .next()
@@ -30,8 +34,8 @@ impl Listener {
         let _r = tcp_listener.set_nonblocking(true);
         Ok(Listener {
             tcp_listener,
-            listener_config: Default::default(),
-            socket_config: SocketConfig::new(),
+            listener_config: config.1,
+            socket_config: config.0,
             remotes: HashMap::default()
         })
     }

@@ -1,7 +1,5 @@
 use std::{
-    net::{IpAddr, Ipv4Addr, SocketAddr, ToSocketAddrs, UdpSocket},
-    sync::Arc,
-    vec::IntoIter
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, ToSocketAddrs, UdpSocket}, sync::Arc, vec::IntoIter
 };
 
 use crate::{
@@ -120,7 +118,7 @@ impl ServClient for SocketShared {
 
 impl Server for Listener {
     const RBTL_PROTOCOL_ID: u8 = 1;
-    const RBTL_PROTOCOL_NAME: &str = "tcp";
+    const RBTL_PROTOCOL_NAME: &str = "rudp";
 
     type ServClient = SocketShared;
     type ConnectingClient = Socket;
@@ -169,19 +167,27 @@ impl Server for Listener {
     }
 
     fn connect_info(&self) -> Result<Self::ConnectInfo, ()> {
-        let local_addr = self.udp_socket.local_addr().expect("unable to get local addr");
-        Ok(ConnectInfo {
-            addr: local_addr
-        })
+        let mut local_addr = self.udp_socket.local_addr().map_err(|_| ())?;
+        if local_addr.is_ipv4() {
+            local_addr.set_ip(IpAddr::V4(Ipv4Addr::LOCALHOST))
+        } else {
+            local_addr.set_ip(IpAddr::V6(Ipv6Addr::LOCALHOST))
+        }
+        Ok(ConnectInfo { addr: local_addr })
     }
 
-    fn new_with<I: Into<Self::Init>>(local_addr: I) -> Result<Self, Self::StateError> where Self: Sized {
+    fn new<I: Into<Self::Init>>(local_addr: I) -> Result<Self, Self::StateError> where Self: Sized {
         let local_addr = local_addr.into();
         Self::new(local_addr)
     }
 
-    fn new() -> Result<Self, Self::StateError> where Self: Sized {
+    fn new_defaults() -> Result<Self, Self::StateError> where Self: Sized {
         Self::new("0.0.0.0:0")
+    }
+
+    fn new_with<I: Into<Self::Init>>(local_addr: I, config: Self::ServerConfig) -> Result<Self, Self::StateError> where Self: Sized {
+        let local_addr = local_addr.into();
+        Self::new_with(local_addr, config)
     }
 
     fn process(&mut self) {

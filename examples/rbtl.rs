@@ -1,4 +1,6 @@
-use rbtl::{RBTLClient, RBTLConnector, RBTLMessageId, RBTLClientConnectInfo, RBTLListener};
+use std::net::ToSocketAddrs;
+
+use rbtl::{RBTLClient, RBTLClientConnectInfo, RBTLConnector, RBTLListener, RBTLMessageId, RBTLServInit};
 
 fn spawn_client(client_connect_info: RBTLClientConnectInfo) {
     let mut connector = RBTLConnector::new(client_connect_info, Default::default()).unwrap();
@@ -17,7 +19,8 @@ fn spawn_client(client_connect_info: RBTLClientConnectInfo) {
         }
     }
     let mut client = client.unwrap();
-    println!("(client) successfully connected with {}", client.kind().rbtl_protocol_name());
+
+    println!("(client) successfully connected with {:?} ({})", client.kind(), client.kind().rbtl_protocol_name());
 
     const BYTES: &[u8] = &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
     let mut last_msg_id: Option<RBTLMessageId> = None;
@@ -34,8 +37,10 @@ fn spawn_client(client_connect_info: RBTLClientConnectInfo) {
             }
         } else {
             if i % 10 == 0 {
-                last_msg_id = Some(client.send(BYTES, Default::default()).unwrap());
-                println!("(client) sending message {:?}", last_msg_id.as_ref().cloned().unwrap());
+                last_msg_id = client.send(BYTES, Default::default()).ok();
+                if last_msg_id.is_some() {
+                    println!("(client) sending message {:?}", last_msg_id.as_ref().cloned().unwrap());
+                }
             }
         }
         std::thread::sleep(std::time::Duration::from_millis(16));
@@ -44,7 +49,7 @@ fn spawn_client(client_connect_info: RBTLClientConnectInfo) {
 }
 
 fn main() {
-    let mut listener = RBTLListener::new().unwrap();
+    let mut listener = RBTLListener::new_defaults().unwrap();
 
     let connect_info = listener.connect_info();
     let client_connect_info = RBTLClientConnectInfo::from(&connect_info);

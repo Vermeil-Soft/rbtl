@@ -103,14 +103,16 @@ pub trait Server {
     type SendError;
     type StateError: Error;
     // struct to indicate how to connect to this listener
-    type ConnectInfo: Clone + for <'a> TryFrom<&'a [u8]> + TryInto<Vec<u8>>;
+    type ConnectInfo: Clone + for <'a> TryFrom<&'a [u8]> + TryInto<Vec<u8>> + Debug;
     type MessageId: Debug + Clone + PartialOrd + PartialEq + Eq;
 
-    /// Create a server/listener with a custom init payload, such as the port to choose, etc
-    fn new_with<I: Into<Self::Init>>(init: I) -> Result<Self, Self::StateError> where Self: Sized;
-
     /// Create a server/listener with sensible defaults
-    fn new() -> Result<Self, Self::StateError> where Self: Sized;
+    fn new_defaults() -> Result<Self, Self::StateError> where Self: Sized;
+
+    /// Create a server/listener with a custom init payload, such as the port to choose, etc
+    fn new<I: Into<Self::Init>>(init: I) -> Result<Self, Self::StateError> where Self: Sized;
+
+    fn new_with<I: Into<Self::Init>>(init: I, server_config: Self::ServerConfig) -> Result<Self, Self::StateError> where Self: Sized;
 
     fn set_config(&mut self, config: Self::ServerConfig);
 
