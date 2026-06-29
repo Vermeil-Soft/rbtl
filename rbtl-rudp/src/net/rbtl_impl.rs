@@ -93,6 +93,10 @@ impl Client for Socket {
             where B: Into<Arc<[u8]>> + AsRef<[u8]> + Clone {
         self.send_data(bytes, send_opts)
     }
+
+    fn end(&mut self) {
+        let _r = self.send_end();
+    }
 }
 
 impl ServClient for SocketShared {
@@ -192,6 +196,10 @@ impl Server for Listener {
 
     fn process(&mut self) {
         let _r = self.process();
+    }
+
+    fn end(&mut self) {
+        self.send_end();
     }
 
     fn send_all<B>(&mut self, bytes: B, send_opts: Self::SendOptions) -> Result<(), Self::SendError>

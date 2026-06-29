@@ -206,7 +206,7 @@ impl Listener {
     /// Send a "end" message to ALL remotes
     pub fn send_end(&mut self) {
         for socket in self.remotes.values_mut() {
-            let _r = socket.end();
+            let _r = socket.send_end();
         }
     }
 

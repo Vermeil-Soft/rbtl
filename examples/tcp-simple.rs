@@ -44,7 +44,7 @@ fn main_client(arg1: Option<String>) {
             if i == 10 {
                 socket.send_data(b"HELLOFROMCLIENT1").unwrap();
             } else if i == 450 {
-                socket.end();
+                socket.send_end();
             }
         }
 

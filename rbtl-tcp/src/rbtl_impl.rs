@@ -98,6 +98,10 @@ impl Client for Socket {
             where B: Into<Arc<[u8]>> + AsRef<[u8]> + Clone {
         self.send_data(bytes)
     }
+
+    fn end(&mut self) {
+        let _r = self.send_end();
+    }
 }
 
 impl ServClient for Socket {
@@ -204,5 +208,9 @@ impl Server for Listener {
     fn send_all<B>(&mut self, bytes: B, _send_opts: Self::SendOptions) -> Result<(), Self::SendError>
             where B: Into<Arc<[u8]>> + AsRef<[u8]> + Clone {
         Ok(self.send_data(bytes))
+    }
+
+    fn end(&mut self) {
+        self.send_end();
     }
 }

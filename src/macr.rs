@@ -3,6 +3,10 @@
 macro_rules! _rbtl_structs_impl {
     ( $([$name:ident, $struct:ty] $(,)* )* ) => {
         paste::paste! {
+
+            /// The struct to listen to new connections, basically what the "server" uses.
+            ///
+            /// Sync mode: if you don't call "process" regularly,
             pub struct RBTLListener {
                 $(pub [<$name:snake>] : Option< $struct > ,)*
             }
@@ -214,6 +218,9 @@ macro_rules! _rbtl_structs_impl {
             /// A Client structure.
             ///
             /// You should probably create it from RBTLConnector, but you can also create it from `new`
+            /// 
+            /// Sync version. You need to call "process" regularly otherwise the server will not know your messages
+            /// have arrived, and you won't be able to send new ones.
             impl RBTLClient {
                 pub fn new(b: RBTLClientBuilder) -> Result<Self, Box<dyn std::error::Error>> {
                     match b {
@@ -272,6 +279,14 @@ macro_rules! _rbtl_structs_impl {
                     match self {
                         $( Self::$name(client) => {
                             Box::new(<<$struct as $crate::Server>::ConnectingClient as $crate::Client>::drain_events(client))
+                        } ,)*
+                    }
+                }
+
+                pub fn end(&mut self) {
+                    match self {
+                        $( Self::$name(client) => {
+                            <<$struct as $crate::Server>::ConnectingClient as $crate::Client>::end(client)
                         } ,)*
                     }
                 }
@@ -583,6 +598,14 @@ macro_rules! _rbtl_structs_impl {
                     }
                 }
 
+                pub fn end(&mut self) {
+                    $(
+                        if let Some(s) = self.[<$name:snake>].as_mut() {
+                            <$struct as $crate::Server>::end(s);
+                        }
+                    )*
+                }
+
                 /// Processes event to be drained at a later time. Must be called regularly
                 pub fn process(&mut self) {
                     $(
@@ -591,6 +614,65 @@ macro_rules! _rbtl_structs_impl {
                         }
                     )*
                 }
+            }
+        }
+
+        /// The Async version or RBTLClient.
+        /// 
+        /// There is no "process" to call, it's all called from another thread.
+        pub struct RBTLAsyncClient {
+            inner: RBTLAsyncClientInner,
+        }
+
+        struct RBTLAsyncClientInner {
+            pub (self) client: std::sync::Arc<std::sync::Mutex<RBTLClient>>,
+            pub (self) should_stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        }
+
+        impl Drop for RBTLAsyncClient {
+            fn drop(&mut self) {
+                self.inner.should_stop.store(true, std::sync::atomic::Ordering::Relaxed);
+            }
+        }
+
+        impl RBTLAsyncClient {
+            fn main_loop(inner: &RBTLAsyncClientInner) {
+                let mut post_end_iters: usize = 100;
+                let mut has_sent_end = false;
+                let should_stop = std::sync::Arc::clone(&inner.should_stop);
+                let client = std::sync::Arc::clone(&inner.client);
+                while post_end_iters > 0 {
+                    if should_stop.load(std::sync::atomic::Ordering::Relaxed) {
+                        // "should stop" branch
+                        let mut guard = client.lock().expect("poison");
+                        if !has_sent_end {
+                            has_sent_end = true;
+                            guard.end()
+                        }
+                        guard.process();
+                        post_end_iters -= 1;
+                        continue;
+                    }
+
+                    // "running" branch
+                    let mut guard = client.lock().expect("poison");
+                    guard.process();
+                }
+            }
+
+            pub fn new(client: RBTLClient) -> Self {
+                use std::sync::Arc;
+                let client = Arc::new(std::sync::Mutex::new(client));
+                let should_stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+
+                let inner = RBTLAsyncClientInner { client, should_stop };
+                Self::main_loop(&inner);
+                Self { inner }
+            }
+
+            pub fn with_lock<O, F: FnMut(&mut RBTLClient) -> O>(&self, mut f: F) -> O {
+                let mut guard = self.inner.client.lock().expect("poison");
+                f(&mut *guard)
             }
         }
     }

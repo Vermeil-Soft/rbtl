@@ -382,7 +382,7 @@ impl Socket {
         self.ping_tracker.last_ping_info()
     }
 
-    pub fn end(&mut self) {
+    pub fn send_end(&mut self) {
         if let Some(tcp_stream) = self.raw_mut() {
             let _r = tcp_stream.shutdown(std::net::Shutdown::Write);
         }

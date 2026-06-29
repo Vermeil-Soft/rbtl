@@ -184,7 +184,7 @@ impl<K: SocketKind> SocketCommon<K> {
     }
 
     /// Send a "end" message, meaning this socket has ended peacefully
-    pub fn end(&mut self) -> IoResult<()> {
+    pub fn send_end(&mut self) -> IoResult<()> {
         self.socket.send_end(self.next_local_seq_id.saturating_sub(1), self.cached_now)?;
         self.set_status(SocketStatus::TerminateSent(self.cached_now));
         Ok(())
@@ -310,7 +310,7 @@ impl<K: SocketKind> SocketCommon<K> {
 
     /// Terminates and consumes the socket, by sending a "Ended" event to the remote.
     pub fn terminate(mut self) -> IoResult<()> {
-        self.end()
+        self.send_end()
     }
 
     #[inline]

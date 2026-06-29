@@ -68,6 +68,11 @@ pub trait Client {
 
     fn process(&mut self);
 
+    /// End this remote, ending connection wit the server
+    /// 
+    /// The same is done when this is dropped, but here there is time to make sure the server has received it
+    fn end(&mut self);
+
     fn drain_events<'a>(&'a mut self) -> impl Iterator<Item=Event> + 'a;
 }
 
@@ -131,6 +136,11 @@ pub trait Server {
 
     /// Returns the info of how to connect to this listener, or an error if the info is not available (yet or forever)
     fn connect_info(&self) -> Result<Self::ConnectInfo, ()>;
+
+    /// End all the remotes
+    /// 
+    /// the same is done when this is dropped, but here there is time to make sure the remotes receive it
+    fn end(&mut self);
 
     fn len(&self) -> usize;
 
