@@ -1,10 +1,8 @@
-use std::net::ToSocketAddrs;
-
-use rbtl::{RBTLClient, RBTLClientConnectInfo, RBTLConnector, RBTLListener, RBTLMessageId, RBTLServInit};
+use rbtl::{RBTLClientConnectInfo, RBTLConnector, RBTLListener, RBTLMessageId};
 
 fn spawn_client(client_connect_info: RBTLClientConnectInfo) {
     let mut connector = RBTLConnector::new(client_connect_info, Default::default()).unwrap();
-
+    println!("(client) created");
     let mut client = None;
     for _i in 0..1000 {
         match connector.attempt_connect() {

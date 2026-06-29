@@ -4,7 +4,7 @@ macro_rules! _rbtl_structs_impl {
     ( $([$name:ident, $struct:ty] $(,)* )* ) => {
         paste::paste! {
             pub struct RBTLListener {
-                $(pub [<$name:snake>] : $struct ,)*
+                $(pub [<$name:snake>] : Option< $struct > ,)*
             }
 
             #[derive(Debug, Clone, Default)]
@@ -48,13 +48,13 @@ macro_rules! _rbtl_structs_impl {
                 $(pub [<$name:snake>] : <<$struct as $crate::Server>::ConnectingClient as $crate::Client>::ConnectOptions ,)*
             }
 
-            #[derive(Clone, Debug)]
+            #[derive(Clone, Debug, Default)]
             pub struct RBTLServConfig {
                 $(pub [<$name:snake>] : <$struct as $crate::Server>::ServerConfig,)*
             }
 
             pub struct RBTLServInit {
-                $(pub [<$name:snake>] : <$struct as $crate::Server>::Init,)*
+                $(pub [<$name:snake>] : Option<<$struct as $crate::Server>::Init>,)*
             }
 
             #[derive(Clone, Debug)]
@@ -409,80 +409,126 @@ macro_rules! _rbtl_structs_impl {
                 /// Create a listener with sensible defaults for each listener type
                 pub fn new_defaults() -> Result<Self, Box<dyn std::error::Error>> {
                     Ok(Self {
-                        $( [<$name:snake>] : <$struct as $crate::rbtl_core::Server>::new_defaults()? ,)*
+                        $( [<$name:snake>] :
+                            match <$struct as $crate::rbtl_core::Server>::new_defaults() {
+                                Ok(s) => Some(s),
+                                Err(e) => {
+                                    log::error!("error initalizing rbtl default server's {} protocol: {}",
+                                        <$struct as $crate::rbtl_core::Server>::RBTL_PROTOCOL_NAME,
+                                        e
+                                    );
+                                    None
+                                }
+                            }
+                        ,)*
                     })
                 }
 
                 /// Create a listener with custom options for each listener type
                 pub fn new(init: RBTLServInit) -> Result<Self, Box<dyn std::error::Error>> {
-                    Ok(Self {
-                        $( [<$name:snake>] : <$struct as $crate::rbtl_core::Server>::new(
-                            init.[<$name:snake>]
-                        )? ,)*
-                    })
+                    Self::new_with(init, Default::default())
                 }
 
                 /// Create a listener with custom options and server config for each listener type
                 pub fn new_with(init: RBTLServInit, config: RBTLServConfig) -> Result<Self, Box<dyn std::error::Error>> {
                     Ok(Self {
-                        $( [<$name:snake>] : <$struct as $crate::rbtl_core::Server>::new_with(
-                            init.[<$name:snake>], config.[<$name:snake>]
-                        )? ,)*
+                        $( [<$name:snake>] : init.[<$name:snake>].and_then(|init| {
+                                match <$struct as $crate::rbtl_core::Server>::new_with(init, config.[<$name:snake>]) {
+                                    Ok(s) => Some(s),
+                                    Err(e) => {
+                                        log::error!("error initalizing rbtl server's {} protocol: {}",
+                                            <$struct as $crate::rbtl_core::Server>::RBTL_PROTOCOL_NAME,
+                                            e
+                                        );
+                                        None
+                                    }
+                                }
+                            })
+                        ,)*
                     })
                 }
 
                 /// Returns the amount of adapters currently coded
-                pub fn adapters_len() -> usize {
+                pub fn adapters_max() -> usize {
                     0
                         $( + <$struct as $crate::rbtl_core::Server>::RBTL_PROTOCOL_ID as usize * 0 + 1 )*
                 }
 
+                /// Returns the amount of adapters available (initialized)
+                pub fn adapters_len(&self) -> usize {
+                    0
+                        $( + if self.[<$name:snake>].is_some() { 1 } else { 0 } )*
+                }
+
                 pub fn set_config(&mut self, config: RBTLServConfig) {
                     $(
-                        <$struct as $crate::Server>::set_config(
-                            &mut self.[<$name:snake>],
-                            config.[<$name:snake>]
-                        );
+                        if let Some(s) = self.[<$name:snake>].as_mut() {
+                            <$struct as $crate::Server>::set_config(s, config.[<$name:snake>])
+                        };
                     )*
                 }
 
                 pub fn get_config(&mut self) -> RBTLServConfig {
                     RBTLServConfig {
-                        $( [<$name:snake>]: <$struct as $crate::Server>::get_config(&self.[<$name:snake>]), )*
+                        $( [<$name:snake>]: self.[<$name:snake>].as_ref().map(|s|
+                                <$struct as $crate::Server>::get_config(s)
+                            ).unwrap_or_default(),
+                        )*
                     }
                 }
 
                 /// Send a message to all remotes
-                pub fn send_all<B>(&mut self, bytes: B, send_options: RBTLSendOptions) -> Result<(), Box<dyn std::error::Error>>
+                ///
+                /// Note that even if you receive an error, the other remotes may still have their messages sent
+                pub fn send_all<B>(&mut self, bytes: B, send_options: RBTLSendOptions) -> Result<(), Vec<$crate::Error>>
                     where B: Into<std::sync::Arc<[u8]>> + AsRef<[u8]> + Clone 
                 {
-                    $( <$struct as $crate::Server>::send_all(
-                        &mut self.[<$name:snake>],
-                        bytes.clone(),
-                        send_options.[<$name:snake>]
-                    )?; )*
-                    Ok(())
+                    let mut v = vec![];
+                    $(
+                        if let Some(s) = self.[<$name:snake>].as_mut() {
+                            let r = <$struct as $crate::Server>::send_all(
+                                s,
+                                bytes.clone(),
+                                send_options.[<$name:snake>]
+                            );
+                            if let Err(e) = r {
+                                let msg = format!("protocol {} send_all error",
+                                    <$struct as $crate::Server>::RBTL_PROTOCOL_NAME
+                                );
+                                v.push($crate::Error::from_cause(msg, e));
+                            }
+                        };
+                    )*
+                    if v.len() > 0 {
+                        Err(v)
+                    } else {
+                        Ok(())
+                    }
                 }
 
                 pub fn get<'a>(&'a self, key: &RBTLKey) -> Option<RBTLServClient<'a>> {
                     match key {
-                        $( RBTLKey::$name(k) => <$struct as $crate::Server>::get(&self.[<$name:snake>], k)
-                            .map(|serv_client| RBTLServClient::$name(serv_client)),
+                        $(
+                            RBTLKey::$name(k) => self.[<$name:snake>].as_ref()
+                                .and_then(|s| <$struct as $crate::Server>::get(s, k))
+                                .map(|serv_client| RBTLServClient::$name(serv_client)),
                         )*
                     }
                 }
 
                 pub fn get_mut<'a>(&'a mut self, key: &RBTLKey) -> Option<RBTLServClientMut<'a>> {
                     match key {
-                        $( RBTLKey::$name(k) => <$struct as $crate::Server>::get_mut(&mut self.[<$name:snake>], k)
-                            .map(|serv_client| RBTLServClientMut::$name(serv_client)),
+                        $(
+                            RBTLKey::$name(k) => self.[<$name:snake>].as_mut()
+                                .and_then(|s| <$struct as $crate::Server>::get_mut(s, k))
+                                .map(|serv_client| RBTLServClientMut::$name(serv_client)),
                         )*
                     }
                 }
 
                 /// Returns the amount of remotes registered
                 pub fn len(&self) -> usize {
-                    $( <$struct as $crate::Server>::len(&self.[<$name:snake>]) + )*
+                    $( self.[<$name:snake>].as_ref().map_or(0, |s| <$struct as $crate::Server>::len(s)) + )*
                     0
                 }
 
@@ -490,7 +536,10 @@ macro_rules! _rbtl_structs_impl {
                 pub fn iter_mut<'a>(&'a mut self) -> impl Iterator<Item=(RBTLKey, RBTLServClientMut<'a>)> {
                     std::iter::empty::<(RBTLKey, RBTLServClientMut)>()
                         $(
-                            .chain( <$struct as $crate::Server>::iter_mut(&mut self.[<$name:snake>])
+                            .chain(
+                                self.[<$name:snake>].iter_mut().map(|s|
+                                    <$struct as $crate::Server>::iter_mut(s)
+                                ).flatten()
                                 .map(|(key, sclient)| (RBTLKey::$name(key.clone()), RBTLServClientMut::$name(sclient)) )
                             )
                         )*
@@ -500,7 +549,10 @@ macro_rules! _rbtl_structs_impl {
                 pub fn iter<'a>(&'a self) -> impl Iterator<Item=(RBTLKey, RBTLServClient<'a>)> {
                     std::iter::empty::<(RBTLKey, RBTLServClient)>()
                         $(
-                            .chain( <$struct as $crate::Server>::iter(&self.[<$name:snake>])
+                            .chain(
+                                self.[<$name:snake>].iter().map(|s|
+                                    <$struct as $crate::Server>::iter(s)
+                                ).flatten()
                                 .map(|(key, sclient)| (RBTLKey::$name(key.clone()), RBTLServClient::$name(sclient)) )
                             )
                         )*
@@ -510,21 +562,34 @@ macro_rules! _rbtl_structs_impl {
                 pub fn drain_events<'a>(&'a mut self) -> impl Iterator<Item=(RBTLKey, rbtl_core::Event)> + 'a {
                     std::iter::empty::<(RBTLKey, rbtl_core::Event)>()
                         $(
-                            .chain( <$struct as $crate::Server>::drain_events(&mut self.[<$name:snake>])
+                            .chain(
+                                self.[<$name:snake>].iter_mut().map(|s|
+                                    <$struct as $crate::Server>::drain_events(s)
+                                ).flatten()
                                 .map(|(key, event)| (RBTLKey::$name(key), event) )
                             )
                         )*
                 }
 
+                /// Return the connection info for this server.
+                /// 
+                /// In theory, if this is sent to some clients, they should be able to connect to this remote.
                 pub fn connect_info(&self) -> RBTLConnectInfo {
                     RBTLConnectInfo {
-                        $( [<$name:snake>] : <$struct as $crate::rbtl_core::Server>::connect_info(&self.[<$name:snake>]) ,)*
+                        $( [<$name:snake>] : self.[<$name:snake>].as_ref()
+                            .ok_or(())
+                            .and_then(|s| <$struct as $crate::rbtl_core::Server>::connect_info(s)),
+                        )*
                     }
                 }
 
-                /// processes event to be drained at a later time
+                /// Processes event to be drained at a later time. Must be called regularly
                 pub fn process(&mut self) {
-                    $( <$struct as $crate::Server>::process(&mut self.[<$name:snake>]); )*
+                    $(
+                        if let Some(s) = self.[<$name:snake>].as_mut() {
+                            <$struct as $crate::Server>::process(s);
+                        }
+                    )*
                 }
             }
         }

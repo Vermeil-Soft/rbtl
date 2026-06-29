@@ -95,6 +95,12 @@ impl ListenerConfig {
     }
 }
 
+impl Default for ListenerConfig {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct PacketSendOptions {
     pub resend_delay: Duration,

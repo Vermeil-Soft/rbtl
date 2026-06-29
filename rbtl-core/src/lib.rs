@@ -35,7 +35,7 @@ impl Status {
 
 pub trait Client {
     type Server: Server;
-    type ClientConfig: Clone + Debug;
+    type ClientConfig: Clone + Debug + Default;
     type Init;
     type ConnectOptions: Debug + Default + Clone;
     type SendOptions: Debug + Default + Clone;
@@ -96,7 +96,7 @@ pub trait Server {
 
     type Key: Debug + Clone + Hash + PartialEq + Eq;
     type Init;
-    type ServerConfig: Clone + Debug;
+    type ServerConfig: Clone + Debug + Default;
     type ServClient: ServClient;
     type ConnectingClient;
     type SendOptions: Default;
