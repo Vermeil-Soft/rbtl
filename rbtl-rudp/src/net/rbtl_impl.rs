@@ -166,6 +166,10 @@ impl Server for Listener {
         self.iter_mut()
     }
 
+    fn connected_len(&self) -> usize {
+        self.connected_remotes_len()
+    }
+
     fn len(&self) -> usize {
         self.remotes_len()
     }

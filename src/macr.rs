@@ -547,6 +547,12 @@ macro_rules! _rbtl_structs_impl {
                     0
                 }
 
+                /// Returns the amount of remotes currently connected
+                pub fn connected_len(&self) -> usize {
+                    $( self.[<$name:snake>].as_ref().map_or(0, |s| <$struct as $crate::Server>::connected_len(s)) + )*
+                    0
+                }
+
                 /// Iters mutably through all remotes
                 pub fn iter_mut<'a>(&'a mut self) -> impl Iterator<Item=(RBTLKey, RBTLServClientMut<'a>)> {
                     std::iter::empty::<(RBTLKey, RBTLServClientMut)>()
@@ -622,11 +628,16 @@ macro_rules! _rbtl_structs_impl {
         /// There is no "process" to call, it's all called from another thread.
         pub struct RBTLAsyncClient {
             inner: RBTLAsyncClientInner,
+            // client uses 2 Vec of events to swap and avoid reallocation, one is in a lock,
+            // and the other outside of it. every time the events need to be drained, the 2 vecs are swapped
+            // so that we can have a safe lifetime (outside of lock) for an iterator to the draining events
+            pending_events: Vec<$crate::rbtl_core::Event>,
         }
 
         struct RBTLAsyncClientInner {
             pub (self) client: std::sync::Arc<std::sync::Mutex<RBTLClient>>,
             pub (self) should_stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+            pub (self) events: std::sync::Arc<std::sync::Mutex<Vec<$crate::rbtl_core::Event>>>
         }
 
         impl Drop for RBTLAsyncClient {
@@ -636,28 +647,40 @@ macro_rules! _rbtl_structs_impl {
         }
 
         impl RBTLAsyncClient {
-            fn main_loop(inner: &RBTLAsyncClientInner) {
-                let mut post_end_iters: usize = 100;
-                let mut has_sent_end = false;
+            fn spawn_thread_loop(inner: &RBTLAsyncClientInner) {
+                const WAIT_DUR: std::time::Duration = std::time::Duration::from_millis(1);
+
                 let should_stop = std::sync::Arc::clone(&inner.should_stop);
                 let client = std::sync::Arc::clone(&inner.client);
-                while post_end_iters > 0 {
-                    if should_stop.load(std::sync::atomic::Ordering::Relaxed) {
-                        // "should stop" branch
-                        let mut guard = client.lock().expect("poison");
-                        if !has_sent_end {
-                            has_sent_end = true;
-                            guard.end()
-                        }
-                        guard.process();
-                        post_end_iters -= 1;
-                        continue;
-                    }
+                let events = std::sync::Arc::clone(&inner.events);
 
-                    // "running" branch
-                    let mut guard = client.lock().expect("poison");
-                    guard.process();
-                }
+                std::thread::spawn(move || {
+                    let mut post_end_iters: usize = 100;
+                    let mut has_sent_end = false;
+
+                    while post_end_iters > 0 {
+                        std::thread::sleep(WAIT_DUR);
+                        if should_stop.load(std::sync::atomic::Ordering::Relaxed) {
+                            // "should stop" branch
+                            let mut guard = client.lock().expect("poison");
+                            if !has_sent_end {
+                                has_sent_end = true;
+                                guard.end()
+                            }
+                            guard.process();
+                            post_end_iters -= 1;
+                            continue;
+                        }
+
+                        // "running" branch
+                        let mut guard = client.lock().expect("poison");
+                        guard.process();
+                        let mut events_guard = events.lock().expect("events poison");
+                        events_guard.extend(guard.drain_events());
+                        drop(events_guard);
+                        drop(guard);
+                    }
+                });
             }
 
             pub fn new(client: RBTLClient) -> Self {
@@ -665,14 +688,56 @@ macro_rules! _rbtl_structs_impl {
                 let client = Arc::new(std::sync::Mutex::new(client));
                 let should_stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
 
-                let inner = RBTLAsyncClientInner { client, should_stop };
-                Self::main_loop(&inner);
-                Self { inner }
+                let inner = RBTLAsyncClientInner { client, should_stop, events: Default::default() };
+                Self::spawn_thread_loop(&inner);
+                Self { inner, pending_events: Default::default() }
             }
 
-            pub fn with_lock<O, F: FnMut(&mut RBTLClient) -> O>(&self, mut f: F) -> O {
+            /// Accesses the underlying RBTLClient through a closure
+            ///
+            /// When the closure starts, the lock is taken, and when it ends the lock is given back.
+            ///
+            /// Avoid long running operations in this closure, as otherwise the remote will probably
+            /// not receive data correctly or in time.
+            pub fn with_lock<O, F: FnOnce(&mut RBTLClient) -> O>(&self, f: F) -> O {
                 let mut guard = self.inner.client.lock().expect("poison");
                 f(&mut *guard)
+            }
+            
+            pub fn status(&self) -> $crate::rbtl_core::Status {
+                self.with_lock(|c| c.status())
+            }
+
+            pub fn set_config(&mut self, config: RBTLClientConfig) {
+                self.with_lock(move |c| c.set_config(config))
+            }
+
+            pub fn get_config(&self) -> RBTLClientConfigSingle {
+                self.with_lock(move |c| c.get_config())
+            }
+
+            pub fn kind(&self) -> RBTLProtocolKind {
+                self.with_lock(move |c| c.kind())
+            }
+
+            pub fn drain_events<'a>(&'a mut self) -> impl Iterator<Item=rbtl_core::Event> + 'a {
+                let mut events_guard = self.inner.events.lock().expect("poison");
+                std::mem::swap(&mut self.pending_events, &mut events_guard);
+                drop(events_guard);
+                self.pending_events.drain(..)
+            }
+
+            pub fn end(&mut self) {
+                self.with_lock(move |c| c.end())
+            }
+
+            pub fn is_msg_received(&self, msg_id: &RBTLMessageId) -> Result<bool, ()> {
+                self.with_lock(|c| c.is_msg_received(msg_id))
+            }
+
+            pub fn send<B>(&mut self, bytes: B, send_options: RBTLSendOptions) -> Result<RBTLMessageId, Box<dyn std::error::Error>>
+                where B: Into<std::sync::Arc<[u8]>> + AsRef<[u8]> + Clone + 'static {
+                self.with_lock(|c| c.send(bytes, send_options))
             }
         }
     }

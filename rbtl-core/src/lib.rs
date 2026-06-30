@@ -19,7 +19,7 @@ pub enum Status {
     /// The connection was ended, by us or the remote.
     Ended { by_remote: bool },
     /// An error that can be a protocol error, a network error, coming from us, the remote, ...
-    Error(Arc<dyn std::error::Error>),
+    Error(Arc<dyn std::error::Error + Sync + Send + 'static>),
 }
 
 impl Status {
@@ -142,7 +142,11 @@ pub trait Server {
     /// the same is done when this is dropped, but here there is time to make sure the remotes receive it
     fn end(&mut self);
 
+    /// Returns the amount of *registered* remotes. They do not have to be connected to be registered.
     fn len(&self) -> usize;
+
+    /// Returns the amount of *connected* remotes. They do not have to be connected to be registered.
+    fn connected_len(&self) -> usize;
 
     fn process(&mut self);
 

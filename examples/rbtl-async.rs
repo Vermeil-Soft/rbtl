@@ -1,10 +1,10 @@
-use rbtl::{RBTLClientConnectInfo, RBTLConnector, RBTLListener, RBTLMessageId};
+use rbtl::{RBTLAsyncClient, RBTLClientConnectInfo, RBTLConnector, RBTLListener, RBTLMessageId};
 
 fn spawn_client(client_connect_info: RBTLClientConnectInfo) {
     let mut connector = RBTLConnector::new(client_connect_info, Default::default()).unwrap();
     println!("(client) created");
     let mut client = None;
-    for _i in 0..100 {
+    for _i in 0..1000 {
         match connector.attempt_connect() {
             None => { std::thread::sleep(std::time::Duration::from_millis(16)); },
             Some(Ok(new_client)) => {
@@ -16,15 +16,13 @@ fn spawn_client(client_connect_info: RBTLClientConnectInfo) {
             }
         }
     }
-    let mut client = client.unwrap();
-
+    let client = client.unwrap();
     println!("(client) successfully connected with {:?} ({})", client.kind(), client.kind().rbtl_protocol_name());
+    let mut client = RBTLAsyncClient::new(client);
 
     const BYTES: &[u8] = &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
     let mut last_msg_id: Option<RBTLMessageId> = None;
-    for i in 0..500 {
-        client.process();
-
+    for i in 0..200 {
         for ev in client.drain_events() {
             println!("(client) >> new event {:?}", ev);
         }
@@ -56,9 +54,9 @@ fn main() {
     let client_connect_info = RBTLClientConnectInfo::from(&connect_info);
     println!("(serv) created");
 
-    let r = std::thread::spawn(move || spawn_client(client_connect_info));
-
     const BYTES: &[u8] = &[9, 8, 7, 6, 5, 4, 3, 2, 1, 0];
+
+    let r = std::thread::spawn(move || spawn_client(client_connect_info));
 
     for i in 0..1000 {
         listener.process();

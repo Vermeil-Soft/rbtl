@@ -107,7 +107,7 @@ impl SocketStatus {
     pub fn is_finished_and_old(self, now: Instant) -> bool {
         use SocketStatus::*;
         match self {
-            TimeoutError { error_since: t, .. } | TerminateSent(t) | TerminateReceived(t) => (now - t).as_secs() >= 10,
+            TimeoutError { error_since: t, .. } | TerminateSent(t) | TerminateReceived(t) => (now - t).as_secs() >= 2,
             _ => false
         }
     }

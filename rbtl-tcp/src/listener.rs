@@ -44,6 +44,10 @@ impl Listener {
         self.remotes.len()
     }
 
+    pub fn connected_remotes_len(&self) -> usize {
+        self.remotes.iter().filter(|r| r.1.status().is_connected()).count()
+    }
+
     pub (crate) fn update_config_for_remotes(&mut self) {
         for socket in self.remotes.values_mut() {
             socket.config.clone_from(&self.socket_config);

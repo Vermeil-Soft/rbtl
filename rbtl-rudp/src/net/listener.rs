@@ -216,6 +216,10 @@ impl Listener {
         self.remotes.len()
     }
 
+    pub fn connected_remotes_len(&self) -> usize {
+        self.remotes.iter().filter(|r| r.1.status().is_connected()).count()
+    }
+
     /// Does internal processing for all remotes. Must be done before receiving events.
     pub fn process(&mut self) -> IoResult<()> {
         self.remotes.retain(|_, v| {
