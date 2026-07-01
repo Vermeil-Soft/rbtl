@@ -236,12 +236,7 @@ impl<P: AsRef<[u8]>> PacketVariant<P> {
 /// 10 bytes long. The structure for the udp message is as follow:
 ///
 /// [0-3]: CRC32 check of [4-] as BigEndian u32
-/// [4-7]: first 4 bytes of DH pub key working as "identity" of sender
-/// [8-11]:
-///     * if type == Fragment, the sequence id
-///     * if type == Ack, the sequence id of the acknowledged sequence
-///     * if type == Syn, type == SynAck, nothing (0s)
-///     * if type == End or type == Abort, the last SeqId sent
+/// [4-7]: first 4 bytes of DH pub key working as "identity" of sender (for NAT traversal and other things)
 /// [8]: "Frag Id"
 /// [9] "Frag total"
 /// [10-11]: frag set flags; such as "IS_EXPIRE", "IS_KEY", ...
@@ -258,7 +253,7 @@ impl<P: AsRef<[u8]>> PacketVariant<P> {
 /// However, it does not make sense if frag_id is greater than frag_total, so some of those
 /// couples are reserved to determine the type of the received (or sent!) packet:
 ///
-/// * If Frag ID <= Frag Total, type = Fragment.
+/// * If Frag ID <= Frag Total, type = Fragment, (including Frag ID <= Frag Total == 255)
 /// * If Frag ID == 255, Frag Total == 0: type = Ack. Ack packet for a fragment/sequence element.
 /// * If Frag ID == 255, Frag Total == 1: type = Syn. This type is sent when trying to initiate
 /// a connection with a remote.
@@ -270,8 +265,7 @@ impl<P: AsRef<[u8]>> PacketVariant<P> {
 /// * If Frag ID == 255, Frag Total == 10: type = Heartbeat: Message sent every few iterations
 /// to make sure the remote does not disconnect unexpectedly.
 /// * Other uses for Frag ID == 255 and Frag Total != 255 are reserved for other packets like these.
-///
-/// # Fragment
+/// Note that Frag ID == 255 and Frag Total == 255 means 
 ///
 /// A Fragment is a chunk of a message, represented with the structure above.
 ///
