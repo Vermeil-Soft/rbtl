@@ -133,9 +133,12 @@ pub (crate) struct SocketInner {
 
 
 impl SocketInner {
-    pub (crate) fn new_connecting(udp_socket: Arc<UdpSocket>, remote_addr: SocketAddr) -> Self {
-        let priv_key = EphemeralSecret::random();
-        let pub_key = PublicKey::from(&priv_key);
+    pub (crate) fn new_connecting(udp_socket: Arc<UdpSocket>, remote_addr: SocketAddr, keys: Option<(PublicKey, EphemeralSecret)>) -> Self {
+        let (pub_key, priv_key) = keys.unwrap_or_else(|| {
+            let priv_key = EphemeralSecret::random();
+            let pub_key = PublicKey::from(&priv_key);
+            (pub_key, priv_key)
+        });
         let now = Instant::now();
         SocketInner {
             udp_socket,
@@ -149,8 +152,15 @@ impl SocketInner {
     }
 
     pub (crate) fn new_connected(udp_socket: Arc<UdpSocket>, remote_addr: SocketAddr, other_pub: [u8; 32]) -> Self {
-        let priv_key = EphemeralSecret::random();
-        let pub_key = PublicKey::from(&priv_key);
+        Self::new_connected_with_keys(udp_socket, remote_addr, other_pub, None)
+    }
+
+    pub (crate) fn new_connected_with_keys(udp_socket: Arc<UdpSocket>, remote_addr: SocketAddr, other_pub: [u8; 32], keys: Option<(PublicKey, EphemeralSecret)>) -> Self {
+        let (pub_key, priv_key) = keys.unwrap_or_else(|| {
+            let priv_key = EphemeralSecret::random();
+            let pub_key = PublicKey::from(&priv_key);
+            (pub_key, priv_key)
+        });
         let other_pub_key = PublicKey::from(other_pub);
         SocketInner {
             udp_socket,
@@ -171,9 +181,18 @@ impl SocketInner {
         Ok(())
     }
 
+    pub fn check_self_key(&self, id: &[u8; 4]) -> bool {
+        &self.self_pub_key.as_bytes()[0..4] == id
+    }
+
+    pub fn check_other_key(&self, id: &[u8; 4]) -> bool {
+        &self.other_pub_key.as_bytes()[0..4] == id
+    }
+
     pub (crate) fn send_ack<D: AsRef<[u8]> + 'static>(&mut self, seq_id: SeqId, ack: Ack<D>, now: Instant) -> std::io::Result<()> {
         let packet: Packet<D> = Packet::build(
             self.self_pub_key.as_bytes(),
+            self.other_pub_key.as_bytes(),
             PacketVariant::Ack { seq_id, slice: ack.into_inner() }
         );
         self.send_packet(packet, now)
@@ -186,6 +205,7 @@ impl SocketInner {
     pub (crate) fn send_end(&mut self, last_seq_id: SeqId, now: Instant) -> std::io::Result<()> {
         let packet: Packet<Box<[u8]>> = Packet::build(
             self.self_pub_key.as_bytes(),
+            self.other_pub_key.as_bytes(),
             PacketVariant::End { last_seq_id }
         );
         self.send_packet(packet, now)
@@ -194,6 +214,7 @@ impl SocketInner {
     pub (crate) fn send_abort(&mut self, last_seq_id: SeqId, now: Instant) -> std::io::Result<()> {
         let packet: Packet<Box<[u8]>> = Packet::build(
             self.self_pub_key.as_bytes(),
+            self.other_pub_key.as_bytes(),
             PacketVariant::Abort { last_seq_id }
         );
         self.send_packet(packet, now)
@@ -202,6 +223,7 @@ impl SocketInner {
     pub (crate) fn send_synack(&mut self, now: Instant) -> std::io::Result<()> {
         let packet: Packet<Box<[u8]>> = Packet::build(
             self.self_pub_key.as_bytes(),
+            self.other_pub_key.as_bytes(),
             PacketVariant::SynAck { pub_key: self.self_pub_key.to_bytes() }
         );
         self.send_packet(packet, now)
@@ -210,6 +232,7 @@ impl SocketInner {
     pub (crate) fn send_syn(&mut self, now: Instant) -> std::io::Result<()> {
         let packet: Packet<Box<[u8]>> = Packet::build(
             self.self_pub_key.as_bytes(),
+            self.other_pub_key.as_bytes(),
             PacketVariant::Syn { pub_key: self.self_pub_key.to_bytes() }
         );
         self.send_packet(packet, now)
@@ -218,6 +241,7 @@ impl SocketInner {
     pub (crate) fn send_heartbeat(&mut self, now: Instant) -> std::io::Result<()> {
         let packet: Packet<Box<[u8]>> = Packet::build(
             self.self_pub_key.as_bytes(),
+            self.other_pub_key.as_bytes(),
             PacketVariant::Heartbeat
         );
         self.send_packet(packet, now)
@@ -226,6 +250,7 @@ impl SocketInner {
     pub (crate) fn send_fragment<D: AsRef<[u8]>>(&mut self, fragment: Fragment<D>, now: Instant) -> std::io::Result<()> {
         let packet: Packet<D> = Packet::build(
             self.self_pub_key.as_bytes(),
+            self.other_pub_key.as_bytes(),
             PacketVariant::Fragment(fragment),
         );
         self.send_packet(packet, now)

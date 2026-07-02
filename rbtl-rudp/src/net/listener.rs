@@ -119,7 +119,7 @@ impl Listener {
                 return Ok(())
             },
         };
-        let identity = SocketIdentity { public_key: packet.pub_identity };
+        let identity = SocketIdentity { public_key: packet.src_identity };
         match self.remotes.entry(identity) {
             Entry::Occupied(mut o) => {
                 let socket = o.get_mut();

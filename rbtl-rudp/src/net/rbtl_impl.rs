@@ -1,13 +1,13 @@
 use std::{
-    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, ToSocketAddrs, UdpSocket}, sync::Arc, vec::IntoIter
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, UdpSocket}, sync::Arc,
 };
 
 use crate::{
     Listener, SocketEvent, Socket, SocketCommon, SocketStatus, SocketShared, SocketIdentity, Error,
     net::{
-        socket::SocketKind,
+        socket::{SocketKind, SocketCreateConfig},
         connect_info::ConnectInfo,
-        common::{PacketSendError, PacketSendOptions, SocketConfig, ListenerConfig, SeqId},
+        common::{PacketSendError, PacketSendOptions, SocketConfig, ListenerConfig},
     }
 };
 
@@ -38,7 +38,7 @@ fn map_event(socket_event: SocketEvent) -> Option<Event> {
 impl Client for Socket {
     type Server = Listener;
     type ClientConfig = SocketConfig;
-    type ConnectOptions = SocketConfig;
+    type ConnectOptions = SocketCreateConfig;
     type StateError = Error;
     type SendError = PacketSendError;
     type Init = (Option<SocketAddr>, Option<UdpSocket>);
@@ -61,7 +61,7 @@ impl Client for Socket {
         self.drain_events().filter_map(map_event)
     }
 
-    fn new<I: Into<Self::Init>>(init: I, options: SocketConfig) -> Result<Self, Self::StateError> where Self: Sized {
+    fn new<I: Into<Self::Init>>(init: I, options: Self::ConnectOptions) -> Result<Self, Self::StateError> where Self: Sized {
 
         let (socket_addr, udp_socket) = init.into();
         let socket_addr = socket_addr.unwrap_or(SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 0));

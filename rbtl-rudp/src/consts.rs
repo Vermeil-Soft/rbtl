@@ -3,10 +3,10 @@ use std::time::Duration;
 // CRC32 = u32 = 4bytes
 pub (crate) const PACKET_CRC32_SIZE: usize = std::mem::size_of::<u32>();
 
-// 4 for the pub identity key, 1 for the frag_id, 1 for the frag_total, 2 for flags or reserved stuff
-pub (crate) const PACKET_COMMON_HEADER_SIZE: usize = 8;
+// 4 for the src identity key, 4 for the dst identity key,
+// 1 for the frag_id, 1 for the frag_total, 2 for flags or reserved stuff
+pub (crate) const PACKET_COMMON_HEADER_SIZE: usize = 12;
 
-// 1 other byte for frag_meta
 pub (crate) const PACKET_VAR_START_BYTE: usize = PACKET_CRC32_SIZE + PACKET_COMMON_HEADER_SIZE;
 
 pub (crate) const MAX_RCV_UDP_DATA_SIZE: usize = 1400;

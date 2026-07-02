@@ -29,6 +29,21 @@ use crate::{
 
 pub trait SocketKind {}
 
+#[derive(Default)]
+pub struct SocketCreateConfig {
+    pub keys: Option<(crate::x25519_dalek::PublicKey, crate::x25519_dalek::EphemeralSecret)>,
+    pub socket_config: SocketConfig,
+}
+
+impl std::fmt::Debug for SocketCreateConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SocketCreateConfig")
+            .field("keys", if self.keys.is_none() { &"None" } else {&"Some(_)"})
+            .field("socket_config", &self.socket_config)
+            .finish()
+    }
+}
+
 #[derive(Debug)]
 pub enum SocketKindUnique {}
 #[derive(Debug)]
@@ -199,9 +214,31 @@ impl<K: SocketKind> SocketCommon<K> {
         Ok(())
     }
 
+    /// Check the packet src and dst DH keys. Return Some(_) if it's valid.
+    ///
+    /// If they are invalid for us, put the packet as "raw" (if applicable)
+    fn check_packet_origin(&mut self, packet: Packet<OwnedSlice<u8, Box<[u8]>>>) -> Option<Packet<OwnedSlice<u8, Box<[u8]>>>> {
+        let is_valid = match &packet.packet_variant {
+            PacketVariant::Syn { .. } => true,
+            PacketVariant::SynAck { .. } => self.socket.check_self_key(&packet.dst_identity),
+            _ => self.socket.check_self_key(&packet.dst_identity) && self.socket.check_other_key(&packet.src_identity)
+        };
+        if !is_valid {
+            if self.config.transfer_raw {
+                self.events.push_back(SocketEvent::Raw(packet.to_bytes().into_boxed_slice()));
+            }
+            None
+        } else {
+            Some(packet)
+        }
+    }
+
     pub (crate) fn add_packet(&mut self, packet: Packet<OwnedSlice<u8, Box<[u8]>>>) {
         self.last_received_message = self.cached_now;
         log::trace!("received packet {:?} from remote {}", packet, self.remote_identity());
+        let Some(packet) = self.check_packet_origin(packet) else {
+            return;
+        };
         match packet.packet_variant {
             PacketVariant::Fragment(f) => {
                 log::trace!("received fragment {:?}", f);
@@ -384,7 +421,7 @@ impl SocketCommon<SocketKindShared> {
 
 impl SocketCommon<SocketKindUnique> {
     /// See `connect`, but provide the UDP socket instead of creating it
-    pub fn connect_with_socket(udp_socket: UdpSocket, remote_addr: SocketAddr, options: SocketConfig) -> Result<Socket, Error> {
+    pub fn connect_with_socket(udp_socket: UdpSocket, remote_addr: SocketAddr, options: SocketCreateConfig) -> Result<Socket, Error> {
         let udp_socket = Arc::new(udp_socket);
         crate::os::prepare_socket(&udp_socket);
         udp_socket.set_nonblocking(true)
@@ -395,7 +432,7 @@ impl SocketCommon<SocketKindUnique> {
         let now = Instant::now();
 
         let mut socket = SocketCommon {
-            socket: SocketInner::new_connecting(udp_socket, remote_addr),
+            socket: SocketInner::new_connecting(udp_socket, remote_addr, options.keys),
             local_addr,
             sent_data_tracker: SentDataTracker::new(),
             fragment_assembler: FragmentAssembler::new(),
@@ -405,7 +442,7 @@ impl SocketCommon<SocketKindUnique> {
             cached_now: now,
             last_received_message: now,
 
-            config: options,
+            config: options.socket_config,
             _phantom: PhantomData,
             unknown_messages: Default::default(),
         };
@@ -427,7 +464,7 @@ impl SocketCommon<SocketKindUnique> {
     /// * The remote answered SynAck, and we set the status as "Connected"
     /// * The remote did not answer, and we will get a timeout
     // If you want to accept a new connection, use `new_incoming` instead.
-    pub fn connect<A: ToSocketAddrs>(remote_addr: A, options: SocketConfig) -> Result<Socket, Error> {
+    pub fn connect<A: ToSocketAddrs>(remote_addr: A, options: SocketCreateConfig) -> Result<Socket, Error> {
         let socket = UdpSocket::bind("0.0.0.0:0")
             .map_err(|e| Error::from_cause(format!("could not bind udp socket"), e))?;
         let remote_addr = remote_addr.to_socket_addrs()
@@ -437,7 +474,7 @@ impl SocketCommon<SocketKindUnique> {
         Self::connect_with_socket(socket, remote_addr, options)
     }
 
-    pub fn from_connect_info(connect_info: ConnectInfo, options: SocketConfig) -> Result<Socket, Error> {
+    pub fn from_connect_info(connect_info: ConnectInfo, options: SocketCreateConfig) -> Result<Socket, Error> {
         let socket = UdpSocket::bind("0.0.0.0:0")
             .map_err(|e| Error::from_cause(format!("could not bind udp socket"), e))?;
         Self::connect_with_socket(socket, connect_info.addr, options)

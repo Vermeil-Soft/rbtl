@@ -11,7 +11,8 @@ use crate::{
 
 #[derive(Debug)]
 pub (crate) struct Packet<P: AsRef<[u8]>> {
-    pub (crate) pub_identity: [u8; 4],
+    pub (crate) src_identity: [u8; 4],
+    pub (crate) dst_identity: [u8; 4],
     pub (crate) packet_variant: PacketVariant<P>,
 }
 
@@ -27,16 +28,18 @@ pub (crate) enum PacketVariant<P: AsRef<[u8]>> {
 }
 
 impl<P: AsRef<[u8]>> Packet<P> {
-    pub (crate) fn new(pub_identity: [u8; 4], packet_variant: PacketVariant<P>) -> Self {
+    pub (crate) fn new(src_identity: [u8; 4], dst_identity: [u8; 4], packet_variant: PacketVariant<P>) -> Self {
         Self {
-            pub_identity,
+            src_identity,
+            dst_identity,
             packet_variant
         }
     }
 
-    pub (crate) fn build(pub_identity: &[u8; 32], packet_variant: PacketVariant<P>) -> Self {
-        let pub_identity: [u8; 4] = pub_identity[0..4].try_into().unwrap();
-        Self::new(pub_identity, packet_variant)
+    pub (crate) fn build(src_id: &[u8; 32], dst_id: &[u8; 32], packet_variant: PacketVariant<P>) -> Self {
+        let src_id: [u8; 4] = src_id[0..4].try_into().unwrap();
+        let dst_id: [u8; 4] = dst_id[0..4].try_into().unwrap();
+        Self::new(src_id, dst_id, packet_variant)
     }
 
     fn udp_packet_size(&self) -> usize {
@@ -60,22 +63,22 @@ impl<P: AsRef<[u8]>> Packet<P> {
 
     #[inline]
     fn write_frags(frag_id: u8, frag_tot: u8, output: &mut Vec<u8>) {
-        output[9] = frag_tot;
-        output[8] = frag_id;
+        output[13] = frag_tot;
+        output[12] = frag_id;
     }
 
     #[inline]
     fn write_flags(flags: u16, output: &mut Vec<u8>) {
-        BigEndian::write_u16(&mut output[10..12], flags);
+        BigEndian::write_u16(&mut output[14..16], flags);
     }
 
     #[inline]
     fn write_seq_id(seq_id: SeqId, output: &mut Vec<u8>) {
-        BigEndian::write_u32(&mut output[12..16], seq_id);
+        BigEndian::write_u32(&mut output[16..20], seq_id);
     }
 
     fn write_pub_key(key: &[u8; 32], output: &mut Vec<u8>) {
-        output[12..44].copy_from_slice(key);
+        output[16..48].copy_from_slice(key);
     }
 
     pub (crate) fn to_bytes(&self) -> Vec<u8> {
@@ -83,13 +86,13 @@ impl<P: AsRef<[u8]>> Packet<P> {
 
         match &self.packet_variant {
             PacketVariant::Fragment(f) => {
-                bytes[16..].copy_from_slice(f.data.as_ref());
+                bytes[20..].copy_from_slice(f.data.as_ref());
                 Self::write_seq_id(f.seq_id, &mut bytes);
                 Self::write_flags(f.frag_set_flags.0, &mut bytes);
                 Self::write_frags(f.frag_id, f.frag_total, &mut bytes);
             },
             PacketVariant::Ack { seq_id, slice } => {
-                bytes[16..].copy_from_slice(slice.as_ref());
+                bytes[20..].copy_from_slice(slice.as_ref());
                 Self::write_seq_id(*seq_id, &mut bytes);
                 Self::write_flags(0, &mut bytes);
                 Self::write_frags(255, 0, &mut bytes);
@@ -119,19 +122,21 @@ impl<P: AsRef<[u8]>> Packet<P> {
                 Self::write_frags(255, 10, &mut bytes);
             },
         }
-        bytes[4..8].copy_from_slice(&self.pub_identity);
+        bytes[4..8].copy_from_slice(&self.src_identity);
+        bytes[8..12].copy_from_slice(&self.dst_identity);
         let generated_crc: u32 = crc32_hash(&bytes[4..]);
         BigEndian::write_u32(&mut bytes[0..4], generated_crc);
         bytes
     }
 
-    fn read_common_header(bytes: &[u8; 12]) -> (u32, [u8; 4], u8, u8, u16) {
+    fn read_common_header(bytes: &[u8; 16]) -> (u32, [u8; 4], [u8; 4], u8, u8, u16) {
         let crc32 = BigEndian::read_u32(&bytes[0..4]);
-        let pub_id = <[u8; 4]>::try_from(&bytes[4..8]).unwrap();
-        let frag_id = bytes[8]; 
-        let frag_tot = bytes[9]; 
-        let frag_flags = BigEndian::read_u16(&bytes[10..12]);
-        (crc32, pub_id, frag_id, frag_tot, frag_flags)
+        let src_id = <[u8; 4]>::try_from(&bytes[4..8]).unwrap();
+        let dst_id = <[u8; 4]>::try_from(&bytes[8..12]).unwrap();
+        let frag_id = bytes[12];
+        let frag_tot = bytes[13];
+        let frag_flags = BigEndian::read_u16(&bytes[14..16]);
+        (crc32, src_id, dst_id, frag_id, frag_tot, frag_flags)
     }
 
     pub fn attempt_from_bytes(bytes: P) -> Result<Packet<OwnedSlice<u8, P>>, (UdpDataError, P)> {
@@ -139,8 +144,8 @@ impl<P: AsRef<[u8]>> Packet<P> {
         let Some((header_slice, data_slice)) = bytes_ref.split_at_checked(PACKET_VAR_START_BYTE) else {
             return Err((UdpDataError::NotBigEnough, bytes));
         };
-        let header_slice = <&[u8; 12]>::try_from(header_slice).unwrap();
-        let (crc32, pub_id, frag_id, frag_tot, frag_flags) = Self::read_common_header(header_slice);
+        let header_slice = header_slice.as_array().unwrap();
+        let (crc32, src_id, dst_id, frag_id, frag_tot, frag_flags) = Self::read_common_header(header_slice);
 
         let computed_crc32 = crc32_hash(&bytes_ref[4..]);
         if computed_crc32 != crc32 {
@@ -199,13 +204,15 @@ impl<P: AsRef<[u8]>> Packet<P> {
             }
             (frag_id, frag_total) => return Err((UdpDataError::InvalidFragLayout(frag_id, frag_total), bytes)),
         };
-        let packet = Packet::new(pub_id, variant);
+        let packet = Packet::new(src_id, dst_id, variant);
         Ok(packet)
     }
 
     #[cfg(test)]
     pub (crate) fn cmp_with<T2: AsRef<[u8]>>(&self, other: &Packet<T2>) -> bool {
-        self.pub_identity == other.pub_identity && self.packet_variant.cmp_with(&other.packet_variant)
+        self.src_identity == other.src_identity &&
+        self.dst_identity == other.dst_identity &&
+        self.packet_variant.cmp_with(&other.packet_variant)
     }
 }
 
@@ -237,10 +244,12 @@ impl<P: AsRef<[u8]>> PacketVariant<P> {
 ///
 /// [0-3]: CRC32 check of [4-] as BigEndian u32
 /// [4-7]: first 4 bytes of DH pub key working as "identity" of sender (for NAT traversal and other things)
-/// [8]: "Frag Id"
-/// [9] "Frag total"
-/// [10-11]: frag set flags; such as "IS_EXPIRE", "IS_KEY", ...
-/// [12-15]: sequence id, if applicable.
+/// [8-11]: first 4 bytes of DH pub key, but for the destination instead. If unknown, send all 0s
+/// [12]: "Frag Id"
+/// [13] "Frag total"
+/// [14-15]: frag set flags; such as "IS_EXPIRE", "IS_KEY", ...
+/// [16-19]: sequence id (if applicable).
+/// [rest..]: data (if applicable)
 ///
 /// For now, there are 6 types of messages: 
 /// `Fragment`s, `Ack`s, `Syn`, `SynAck`, `End`, `Abort` and `Heartbeat`.
@@ -303,6 +312,8 @@ impl<P: AsRef<[u8]>> PacketVariant<P> {
 /// The receiver will send 1 of these packets per iteration at *most*, unless the packet is totally received
 /// (all 1s to send), then the packet is sent once per iteration,
 /// for multiple iterations (to make sure the ack goes through).
+///
+/// Note that everything is Big Endian encoded (as is the standard for most network protocols)
 pub struct UdpBytes<B: AsRef<[u8]>> {
    pub (crate) buffer: B
 }
@@ -316,8 +327,6 @@ impl<B: AsRef<[u8]>> std::fmt::Debug for UdpBytes<B> {
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub (crate) enum UdpDataError {
     /// Received data was not big enough to be a message readable by this crate.
-    ///
-    /// (It must be at least 10 bytes, 11 bytes for frags)
     NotBigEnough, // (That's what she said)
     /// The Crc inside the message was not valid
     InvalidCrc,
@@ -394,8 +403,9 @@ fn udp_fail_invalid_crc() {
 #[cfg(test)]
 fn udp_success_fragment_parse() {
     let received_message_bytes: &'static [u8] = &[
-        0x78, 0x73, 0x76, 0x14, // crc32
-        0x00, 0x00, 0x00, 0x00, // pub key
+        0xBE, 0xE8, 0xC1, 0x2B, // crc32
+        0x00, 0x00, 0x00, 0x00, // pub src key
+        0x00, 0x00, 0x00, 0x00, // pub dst key
         0x00, 0x00, 0x00, 0x00, // frag id / frag tot / frag flags
         0x00, 0x00, 0x00, 0x00, // seq id
         1 // data
@@ -417,8 +427,9 @@ fn udp_success_fragment_parse() {
 #[cfg(test)]
 fn udp_fail_fragment_invalid_layout() {
     let received_message_bytes: &'static [u8] = &[
-        0xbe, 0x87, 0x5e, 0x7e,
-        0x00, 0x00, 0x00, 0x00, // pub key
+        0xA0, 0x70, 0x47, 0x78,
+        0x00, 0x00, 0x00, 0x00, // pub src key
+        0x00, 0x00, 0x00, 0x00, // pub dst key
         0xFE, 0xFD, 0x00, 0x00, // frag id / frag tot / frag flags
     ];
     let udp_message = UdpBytes::new(received_message_bytes);
@@ -430,8 +441,9 @@ fn udp_fail_fragment_invalid_layout() {
 #[cfg(test)]
 fn udp_success_ack_parse() {
     let received_message_bytes: &'static [u8] = &[
-        0x0c, 0x55, 0xe7, 0x60, // crc32
-        0x00, 0x00, 0x00, 0x00, // pub key
+        0xA0, 0x41, 0xB6, 0xCD, // crc32
+        0x00, 0x00, 0x00, 0x00, // pub src key
+        0x00, 0x00, 0x00, 0x00, // pub dst key
         0xFF, 0x00, 0x00, 0x00, // frag id / frag tot / frag flags
         0x00, 0x00, 0x00, 0x05, // seq id
         0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF // data
@@ -450,8 +462,9 @@ fn udp_success_ack_parse() {
 #[cfg(test)]
 fn udp_success_syn_parse() {
     let received_message_bytes: &'static [u8] = &[
-        0x24, 0x08, 0x3d, 0x4b,
-        0x00, 0xFF, 0x00, 0xFF, // pub key
+        0x7C, 0x51, 0x6C, 0xF3,
+        0x00, 0xFF, 0x00, 0xFF, // pub src key
+        0x00, 0xDD, 0x00, 0xDD, // pub dst key
         0xFF, 0x01, 0x00, 0x00, // frag id / frag tot / frag flags
         0x00, 0xFF, 0x00, 0xFF, 0x00, 0xFF, 0x00, 0xFF, // pub key: 32 bytes
         0x00, 0xFF, 0x00, 0xFF, 0x00, 0xFF, 0x00, 0xFF,
@@ -472,8 +485,9 @@ fn udp_success_syn_parse() {
 #[cfg(test)]
 fn udp_success_synack_parse() {
     let received_message_bytes: &'static [u8] = &[
-        0xaf, 0xdb, 0x03, 0x52,
-        0x00, 0xFF, 0x00, 0xFF, // pub key
+        0xF7, 0x82, 0x52, 0xEA,
+        0x00, 0xFF, 0x00, 0xFF, // pub src key
+        0x00, 0xDD, 0x00, 0xDD, // pub dst key
         0xFF, 0x02, 0x00, 0x00, // frag id / frag tot / frag flags
         0x00, 0xFF, 0x00, 0xFF, 0x00, 0xFF, 0x00, 0xFF, // pub key: 32 bytes
         0x00, 0xFF, 0x00, 0xFF, 0x00, 0xFF, 0x00, 0xFF,
@@ -494,8 +508,9 @@ fn udp_success_synack_parse() {
 #[cfg(test)]
 fn udp_success_heartbeat_parse() {
     let received_message_bytes: &'static [u8] = &[
-        0xee, 0xe2, 0xd1, 0xf2,
-        0x00, 0xFF, 0x00, 0xFF, // pub key
+        0x40, 0x42, 0x03, 0xC4,
+        0x00, 0xFF, 0x00, 0xFF, // pub src key
+        0x00, 0xDD, 0x00, 0xDD, // pub dst key
         0xFF, 0x0A, 0x00, 0x00, // frag id / frag tot / frag flags
     ];
     let udp_message = UdpBytes::new(received_message_bytes);
@@ -510,7 +525,7 @@ fn udp_success_heartbeat_parse() {
 #[cfg(test)]
 fn udp_ser_de_ack() {
     let ack = PacketVariant::Ack { seq_id: 9, slice: vec![0xAA, 0xAA].into_boxed_slice() };
-    let packet = Packet::new([0xEE; 4], ack);
+    let packet = Packet::new([0xEE; 4], [0xDD; 4], ack);
     let udp_packet = UdpBytes::from(&packet);
     let parsed = udp_packet.compute_packet().expect("compute packet");
     if !packet.cmp_with(&parsed) {
@@ -527,13 +542,14 @@ fn udp_ser_de_syn_synack_others() {
         0x00, 0xFF, 0x00, 0xFF, 0x00, 0xFF, 0x00, 0xFF,
         0x00, 0xFF, 0x00, 0xFF, 0x00, 0xFF, 0x00, 0xFF
     ];
-    let pub_id = [0x00, 0xFF, 0x00, 0xFF];
+    let src_id = [0x00, 0xFF, 0x00, 0xFF];
+    let dst_id = [0x00, 0xDD, 0x00, 0xDD];
     let seq_id = 7;
-    let syn1: Packet<Box<[u8]>> = Packet::new(pub_id, PacketVariant::Syn { pub_key });
-    let synack1: Packet<Box<[u8]>> = Packet::new(pub_id, PacketVariant::SynAck { pub_key });
-    let end1: Packet<Box<[u8]>> = Packet::new(pub_id, PacketVariant::End { last_seq_id: seq_id });
-    let abort1: Packet<Box<[u8]>> = Packet::new(pub_id, PacketVariant::Abort { last_seq_id: seq_id });
-    let heartbeat1: Packet<Box<[u8]>> = Packet::new(pub_id, PacketVariant::Heartbeat);
+    let syn1: Packet<Box<[u8]>> = Packet::new(src_id, dst_id, PacketVariant::Syn { pub_key });
+    let synack1: Packet<Box<[u8]>> = Packet::new(src_id, dst_id, PacketVariant::SynAck { pub_key });
+    let end1: Packet<Box<[u8]>> = Packet::new(src_id, dst_id, PacketVariant::End { last_seq_id: seq_id });
+    let abort1: Packet<Box<[u8]>> = Packet::new(src_id, dst_id, PacketVariant::Abort { last_seq_id: seq_id });
+    let heartbeat1: Packet<Box<[u8]>> = Packet::new(src_id, dst_id, PacketVariant::Heartbeat);
     let syn_packet = UdpBytes::from(&syn1);
     let synack_packet = UdpBytes::from(&synack1);
     let end_packet = UdpBytes::from(&end1);
@@ -572,7 +588,11 @@ fn udp_success_frag_conversions() {
         frag_set_flags: FragmentSetFlags(1),
         data: vec![1u8, 2, 3, 4].into_boxed_slice()
     };
-    let packet = Packet::new([0x00, 0xFF, 0x00, 0xFF], PacketVariant::Fragment(sent_fragment.clone()));
+    let packet = Packet::new(
+        [0x00, 0xFF, 0x00, 0xFF],
+        [0x00, 0xDD, 0x00, 0xDD],
+        PacketVariant::Fragment(sent_fragment.clone())
+    );
     let udp_message: UdpBytes<_> = UdpBytes::from(&packet);
 
     let received_packet = udp_message.compute_packet().expect("compute packet");

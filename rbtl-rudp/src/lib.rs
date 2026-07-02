@@ -10,7 +10,7 @@ pub use crate::{
     error::Error,
     net::{
         socket::{
-            Socket, SocketShared, SocketCommon, SocketEvent,
+            Socket, SocketShared, SocketCommon, SocketEvent, SocketCreateConfig,
         },
         common::{PacketSendOptions, SeqId},
         connect_info::ConnectInfo,
@@ -19,4 +19,5 @@ pub use crate::{
     }
 };
 
+pub use x25519_dalek;
 pub use rbtl_core;

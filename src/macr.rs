@@ -47,7 +47,7 @@ macro_rules! _rbtl_structs_impl {
             }
 
             /// a ConnectInfo that can only be serialized
-            #[derive(Clone, Default)]
+            #[derive(Default)]
             pub struct RBTLConnectOptions {
                 $(pub [<$name:snake>] : <<$struct as $crate::Server>::ConnectingClient as $crate::Client>::ConnectOptions ,)*
             }
@@ -102,7 +102,7 @@ macro_rules! _rbtl_structs_impl {
                         if let Some(conn_info) = &self.connect_info.[<$name:snake>] {
                             let client = <<$struct as $crate::Server>::ConnectingClient as $crate::Client>::from_connect_info(
                                 conn_info.clone(),
-                                self.options.[<$name:snake>].clone()
+                                std::mem::take(&mut self.options.[<$name:snake>])
                             );
                             match client {
                                 Ok(client) => return Some(RBTLClient::$name(client)),

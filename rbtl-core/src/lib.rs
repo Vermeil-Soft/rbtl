@@ -37,7 +37,7 @@ pub trait Client {
     type Server: Server;
     type ClientConfig: Clone + Debug + Default;
     type Init;
-    type ConnectOptions: Debug + Default + Clone;
+    type ConnectOptions: Debug + Default;
     type SendOptions: Debug + Default + Clone;
     type SendError;
     type StateError: Error;
