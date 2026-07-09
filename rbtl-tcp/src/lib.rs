@@ -29,7 +29,7 @@ mod darkmagic;
 pub type SeqId = u32;
 
 pub use crate::{
-    socket::{Socket, SocketEvent, SocketStatus},
+    socket::{Socket, SocketEvent, SocketStatus, SocketConfig},
     connect_info::ConnectInfo,
     error::Error,
     listener::Listener
