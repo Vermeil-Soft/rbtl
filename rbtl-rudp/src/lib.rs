@@ -2,7 +2,7 @@
 
 mod utils;
 pub mod consts;
-mod os;
+pub mod os;
 mod net;
 mod error;
 
