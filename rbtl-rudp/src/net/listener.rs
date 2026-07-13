@@ -37,6 +37,26 @@ impl SocketIdentity {
     pub fn as_u32(&self) -> u32 {
         LittleEndian::read_u32(&self.public_key[0..4])
     }
+
+    pub fn from_u32(v: u32) -> Self {
+        Self {
+            public_key: v.to_le_bytes()
+        }
+    }
+
+    /// Get an identity from bytes.
+    /// 
+    /// Warning: if not enough bytes are there, is will be filled with 0s.
+    pub fn from_bytes(bytes: &[u8]) -> Self {
+        Self {
+            public_key: [
+                bytes.get(0).copied().unwrap_or(0),
+                bytes.get(1).copied().unwrap_or(0),
+                bytes.get(2).copied().unwrap_or(0),
+                bytes.get(3).copied().unwrap_or(0),
+            ]
+        }
+    }
 }
 
 impl std::fmt::Display for SocketIdentity {

@@ -154,8 +154,15 @@ impl<K: SocketKind> SocketCommon<K> {
 
     #[inline]
     /// Gets the next socket event for this socket.
+    /// 
+    /// Call `process` before calling this function
     pub fn next_event(&mut self) -> Option<SocketEvent> {
         self.events.pop_front()
+    }
+
+    /// get the next raw message from unknown remotes
+    pub fn next_unknown(&mut self) -> Option<(SocketAddr, Box<[u8]>)> {
+        self.unknown_messages.pop_front()
     }
 
     #[inline]
@@ -286,13 +293,6 @@ impl<K: SocketKind> SocketCommon<K> {
                 self.events.push_back(SocketEvent::Aborted);
             }
         }
-    }
-
-    /// Get the next socket event from the queue.
-    ///
-    /// Call `process` before this to ensure events are correctly processed
-    pub fn next_socket_event(&mut self) -> Option<SocketEvent> {
-        self.events.pop_front()
     }
 
     /// Returns the ping to the remote as ms
