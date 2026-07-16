@@ -12,7 +12,7 @@ pub use crate::{
         socket::{
             Socket, SocketShared, SocketCommon, SocketEvent, SocketCreateConfig,
         },
-        common::{PacketSendOptions, SocketConfig, SeqId},
+        common::{PacketSendOptions, ListenerConfig, SocketConfig, SeqId},
         connect_info::ConnectInfo,
         inner::SocketStatus,
         listener::{Listener, SocketIdentity},
