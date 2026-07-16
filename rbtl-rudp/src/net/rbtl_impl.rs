@@ -174,14 +174,16 @@ impl Server for Listener {
         self.remotes_len()
     }
 
-    fn connect_info(&self) -> Result<Self::ConnectInfo, ()> {
-        let mut local_addr = self.udp_socket.local_addr().map_err(|_| ())?;
+    fn connect_info(&self) -> Option<Result<Self::ConnectInfo, ()>> {
+        let Ok(mut local_addr) = self.udp_socket.local_addr() else {
+            return Some(Err(()));
+        };
         if local_addr.is_ipv4() {
             local_addr.set_ip(IpAddr::V4(Ipv4Addr::LOCALHOST))
         } else {
             local_addr.set_ip(IpAddr::V6(Ipv6Addr::LOCALHOST))
         }
-        Ok(ConnectInfo { addr: local_addr })
+        Some(Ok(ConnectInfo { addr: local_addr }))
     }
 
     fn new<I: Into<Self::Init>>(local_addr: I) -> Result<Self, Self::StateError> where Self: Sized {

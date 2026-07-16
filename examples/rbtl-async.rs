@@ -1,4 +1,4 @@
-use rbtl::{RBTLAsyncClient, RBTLClientConnectInfo, RBTLConnector, RBTLListener, RBTLMessageId};
+use rbtl::{RBTLAsyncClient, RBTLClientConnectInfo, RBTLConnectInfo, RBTLConnector, RBTLListener, RBTLMessageId};
 
 fn spawn_client(client_connect_info: RBTLClientConnectInfo) {
     let mut connector = RBTLConnector::new(client_connect_info, Default::default()).unwrap();
@@ -44,11 +44,22 @@ fn spawn_client(client_connect_info: RBTLClientConnectInfo) {
     println!("(client) shutting down");
 }
 
+fn wait_for_connect_info(listener: &mut RBTLListener) -> RBTLConnectInfo {
+    for _i in 0..100 {
+        listener.process();
+        if let Some(info) = listener.connect_info() {
+            return info;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(16));
+    }
+    panic!("(serv) did not get server conn info in time")
+}
+
 fn main() {
     let mut listener = RBTLListener::new_defaults().unwrap();
 
     #[allow(unused_mut)]
-    let mut connect_info = listener.connect_info();
+    let mut connect_info = wait_for_connect_info(&mut listener);
     // connect_info.rudp = Err(()); // don't send rudp conn data
     // connect_info.tcp = Err(()); // don't send tcp conn data
     let client_connect_info = RBTLClientConnectInfo::from(&connect_info);

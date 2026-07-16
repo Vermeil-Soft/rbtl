@@ -134,8 +134,12 @@ pub trait Server {
 
     fn iter_mut(&mut self) -> impl Iterator<Item=(&Self::Key, &mut Self::ServClient)>;
 
-    /// Returns the info of how to connect to this listener, or an error if the info is not available (yet or forever)
-    fn connect_info(&self) -> Result<Self::ConnectInfo, ()>;
+    /// Returns the info of how to connect to this listener.
+    /// 
+    /// * None => not yet available
+    /// * Some(Err(_)) => an error happened and we are unable to generate a connect_info
+    /// * Some(Ok(_)) => we can use the connect info
+    fn connect_info(&self) -> Option<Result<Self::ConnectInfo, ()>>;
 
     /// End all the remotes
     /// 

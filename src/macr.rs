@@ -595,13 +595,17 @@ macro_rules! _rbtl_structs_impl {
                 /// Return the connection info for this server.
                 /// 
                 /// In theory, if this is sent to some clients, they should be able to connect to this remote.
-                pub fn connect_info(&self) -> RBTLConnectInfo {
-                    RBTLConnectInfo {
-                        $( [<$name:snake>] : self.[<$name:snake>].as_ref()
-                            .ok_or(())
-                            .and_then(|s| <$struct as $crate::rbtl_core::Server>::connect_info(s)),
-                        )*
-                    }
+                ///
+                /// If this returns None, this means that the listeners are not ready yet and you should try
+                /// again the next frame or so.
+                pub fn connect_info(&self) -> Option<RBTLConnectInfo> {
+                    Some(RBTLConnectInfo {
+                        $( [<$name:snake>] : if let Some(s) = self.[<$name:snake>].as_ref() {
+                            <$struct as $crate::rbtl_core::Server>::connect_info(s)?
+                        } else {
+                            Err(())
+                        },)*
+                    })
                 }
 
                 pub fn end(&mut self) {
