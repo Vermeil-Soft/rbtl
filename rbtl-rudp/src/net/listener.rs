@@ -283,12 +283,26 @@ impl Listener {
         })
     }
 
+    /// Return the next event from known remotes.
+    /// 
+    /// This is slightly less optimized than `drain_events`, but still useable.
+    pub fn next_event(&mut self) -> Option<(SocketIdentity, SocketEvent)> {
+        self.remotes.iter_mut()
+            .filter_map(|s| s.1.next_event().map(|e| (*s.0, e)))
+            .next()
+    }
+
     /// Returns an iterator that drains events for all unknown remotes.
     ///
     /// If you have the config "accept_unknown" enabled, you **must** drain unknown events once in a while,
     /// otherwise the buffer will keep filling up and keep consuming heap as unknown messages accumulate
     pub fn drain_unknown_events<'a>(&'a mut self) -> impl 'a + Iterator<Item=(SocketAddr, Box<[u8]>)> {
         self.unknown_messages.drain(..).map(|(data, addr)| (addr, data))
+    }
+
+    /// Returns the next event that wasn't from any known remote.
+    pub fn next_unknown_event(&mut self) -> Option<(SocketAddr, Box<[u8]>)> {
+        self.unknown_messages.pop_front().map(|(data, addr)| (addr, data))
     }
 }
 
