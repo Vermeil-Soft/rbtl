@@ -7,7 +7,7 @@ use crate::{
     listener::ListenerConfig, socket::SocketConfig
 };
 
-use rbtl_core::{Client, Event, ServClient, Server, Status};
+use rbtl_core::{Client, Event, ServClient, Server, Status, ServerStateError};
 
 fn convert_status(socket_status: SocketStatus) -> Status {
     match socket_status {
@@ -125,6 +125,17 @@ impl ServClient for Socket {
     }
 }
 
+impl ServerStateError for Error {
+    fn new_unavailable() -> Self where Self: Sized {
+        Error::new(format!("unavailable to connect to"))
+    }
+
+    fn is_unavailable(&self) -> bool {
+        self.msg.starts_with("unavailable")
+    }
+}
+
+
 impl Server for Listener {
     const RBTL_PROTOCOL_ID: u8 = 2;
     const RBTL_PROTOCOL_NAME: &str = "tcp";
@@ -179,9 +190,9 @@ impl Server for Listener {
         self.remotes_len()
     }
 
-    fn connect_info(&self) -> Option<Result<Self::ConnectInfo, ()>> {
+    fn connect_info(&self) -> Option<Result<Self::ConnectInfo, Self::StateError>> {
         let Ok(mut local_addr) = self.tcp_listener.local_addr() else {
-            return Some(Err(()))
+            return Some(Err(Error::new(format!("unable to get local_addr: is the network on?"))));
         };
         if local_addr.is_ipv4() {
             local_addr.set_ip(IpAddr::V4(Ipv4Addr::LOCALHOST))

@@ -11,7 +11,7 @@ use crate::{
     }
 };
 
-use rbtl_core::{Client, Event, ServClient, Server, Status};
+use rbtl_core::{Client, Event, ServClient, Server, Status, ServerStateError};
 
 fn status_common<T: SocketKind>(s: &SocketCommon<T>) -> Status {
     match s.status() {
@@ -120,6 +120,16 @@ impl ServClient for SocketShared {
     }
 }
 
+impl ServerStateError for Error {
+    fn new_unavailable() -> Self where Self: Sized {
+        Error::new("unavailable to connect to")
+    }
+
+    fn is_unavailable(&self) -> bool {
+        self.msg.starts_with("unavailable")
+    }
+}
+
 impl Server for Listener {
     const RBTL_PROTOCOL_ID: u8 = 1;
     const RBTL_PROTOCOL_NAME: &str = "rudp";
@@ -174,9 +184,9 @@ impl Server for Listener {
         self.remotes_len()
     }
 
-    fn connect_info(&self) -> Option<Result<Self::ConnectInfo, ()>> {
+    fn connect_info(&self) -> Option<Result<Self::ConnectInfo, Self::StateError>> {
         let Ok(mut local_addr) = self.udp_socket.local_addr() else {
-            return Some(Err(()));
+            return Some(Err(Error::new("unable to get local_addr: is the network on?")));
         };
         if local_addr.is_ipv4() {
             local_addr.set_ip(IpAddr::V4(Ipv4Addr::LOCALHOST))

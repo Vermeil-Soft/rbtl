@@ -8,6 +8,12 @@ pub enum Event {
     StatusChanged(Status),
 }
 
+pub trait ServerStateError: Error {
+    fn new_unavailable() -> Self where Self: Sized;
+
+    fn is_unavailable(&self) -> bool;
+}
+
 #[derive(Clone, Debug)]
 pub enum Status {
     /// Trying to connect to the other party, cannot send data yet
@@ -106,7 +112,7 @@ pub trait Server {
     type ConnectingClient;
     type SendOptions: Default;
     type SendError;
-    type StateError: Error;
+    type StateError: ServerStateError;
     // struct to indicate how to connect to this listener
     type ConnectInfo: Clone + for <'a> TryFrom<&'a [u8]> + TryInto<Vec<u8>> + Debug;
     type MessageId: Debug + Clone + PartialOrd + PartialEq + Eq;
@@ -139,7 +145,7 @@ pub trait Server {
     /// * None => not yet available
     /// * Some(Err(_)) => an error happened and we are unable to generate a connect_info
     /// * Some(Ok(_)) => we can use the connect info
-    fn connect_info(&self) -> Option<Result<Self::ConnectInfo, ()>>;
+    fn connect_info(&self) -> Option<Result<Self::ConnectInfo, Self::StateError>>;
 
     /// End all the remotes
     /// 

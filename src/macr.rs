@@ -19,7 +19,7 @@ macro_rules! _rbtl_structs_impl {
             /// a ConnectInfo that can only be serialized, craeted by the server and meant to be sent to clients
             #[derive(Clone, Debug)]
             pub struct RBTLConnectInfo {
-                $(pub [<$name:snake>] : Result<<$struct as $crate::Server>::ConnectInfo, ()> ,)*
+                $(pub [<$name:snake>] : Result<<$struct as $crate::Server>::ConnectInfo, <$struct as $crate::Server>::StateError> ,)*
             }
 
             /// a ConnectInfo that is meant to be used by a client, that can only be deserialized, using the same
@@ -603,7 +603,8 @@ macro_rules! _rbtl_structs_impl {
                         $( [<$name:snake>] : if let Some(s) = self.[<$name:snake>].as_ref() {
                             <$struct as $crate::rbtl_core::Server>::connect_info(s)?
                         } else {
-                            Err(())
+                            type _S = <$struct as $crate::rbtl_core::Server>::StateError;
+                            Err(<_S as $crate::rbtl_core::ServerStateError>::new_unavailable())
                         },)*
                     })
                 }
