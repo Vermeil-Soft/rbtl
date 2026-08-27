@@ -322,8 +322,10 @@ impl<K: SocketKind> SocketCommon<K> {
                 self.remote_addr(), last_received_ago.as_secs_f32());
             self.set_status(SocketStatus::TimeoutError { error_since: self.cached_now, duration: last_received_ago });
         }
-        for (seq_id, ack) in acks_to_send {
-            self.socket.send_ack(seq_id, ack, self.cached_now)?;
+        if !self.socket.status.is_disconnected() {
+            for (seq_id, ack) in acks_to_send {
+                self.socket.send_ack(seq_id, ack, self.cached_now)?;
+            }
         }
         if self.status().is_connected() {
             if self.cached_now - self.socket.last_sent_message > self.config.heartbeat_delay {
@@ -341,7 +343,9 @@ impl<K: SocketKind> SocketCommon<K> {
                 }
             }
         }
-        self.sent_data_tracker.next_tick(self.cached_now, &mut self.socket);
+        if !self.socket.status.is_disconnected() {
+            self.sent_data_tracker.next_tick(self.cached_now, &mut self.socket);
+        }
         Ok(())
     }
 

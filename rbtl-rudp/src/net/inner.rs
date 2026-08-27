@@ -87,6 +87,7 @@ impl SocketStatus {
         }
     }
 
+    /// Normal connection is finished, but some leftover "ack" messages may still be sent
     pub fn is_finished(self) -> bool {
         use SocketStatus::*;
         match self {
@@ -95,6 +96,7 @@ impl SocketStatus {
         }
     }
 
+    /// Completely disconnected, stop sending messages
     pub fn is_disconnected(self) -> bool {
         use SocketStatus::*;
         match self {
