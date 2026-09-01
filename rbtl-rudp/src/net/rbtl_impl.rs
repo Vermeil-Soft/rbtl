@@ -13,28 +13,6 @@ use crate::{
 
 use rbtl_core::{Client, Event, ServClient, Server, Status, ServerStateError};
 
-fn status_common<T: SocketKind>(s: &SocketCommon<T>) -> Status {
-    match s.status() {
-        SocketStatus::Connected => Status::Ok,
-        SocketStatus::SynReceived => Status::Connecting,
-        SocketStatus::SynSent(_) => Status::Connecting,
-        SocketStatus::TerminateReceived(_) => Status::Ended { by_remote: true },
-        SocketStatus::TerminateSent(_) => Status::Ended { by_remote: false },
-        SocketStatus::TimeoutError { .. } => Status::Timeout,
-    }
-}
-
-fn map_event(socket_event: SocketEvent) -> Option<Event> {
-    match socket_event {
-        SocketEvent::Data(b) => Some(Event::Data(b)),
-        SocketEvent::Aborted => Some(Event::StatusChanged(Status::Ended { by_remote: true })),
-        SocketEvent::Timeout => Some(Event::StatusChanged(Status::Timeout)),
-        SocketEvent::Connected => Some(Event::StatusChanged(Status::Ok)),
-        SocketEvent::Ended => Some(Event::StatusChanged(Status::Ended { by_remote: true })),
-        SocketEvent::Raw(_) => None,
-    }
-}
-
 impl Client for Socket {
     type Server = Listener;
     type ClientConfig = SocketConfig;
@@ -45,7 +23,7 @@ impl Client for Socket {
     type SendOptions = PacketSendOptions;
 
     fn status(&self) -> Status {
-        status_common(self)
+        self.status().to_rbtl_status()
     }
 
     fn get_config(&self) -> Self::ClientConfig {
@@ -58,7 +36,7 @@ impl Client for Socket {
 
     /// Drain events aside from the "raw" ones.
     fn drain_events<'a>(&'a mut self) -> impl Iterator<Item=Event> + 'a {
-        self.drain_events().filter_map(map_event)
+        self.drain_events().filter_map(|e| e.to_rbtl_event().ok())
     }
 
     fn new<I: Into<Self::Init>>(init: I, options: Self::ConnectOptions) -> Result<Self, Self::StateError> where Self: Sized {
@@ -116,7 +94,7 @@ impl ServClient for SocketShared {
     }
 
     fn status(&self) -> Status {
-        status_common(self)
+        self.status().to_rbtl_status()
     }
 }
 
@@ -147,7 +125,7 @@ impl Server for Listener {
 
     fn drain_events<'a>(&'a mut self) -> impl Iterator<Item=(Self::Key, Event)> + 'a {
         self.drain_events()
-            .filter_map(|(id, ev)| map_event(ev).map(|ev| (id, ev)))
+            .filter_map(|(id, ev)| ev.to_rbtl_event().ok().map(|ev| (id, ev)))
     }
 
     fn get(&self, k: &Self::Key) -> Option<&Self::ServClient> {

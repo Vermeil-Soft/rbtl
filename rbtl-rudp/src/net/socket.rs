@@ -10,6 +10,8 @@ use std::{
 
 use x25519_dalek::{PublicKey, EphemeralSecret, SharedSecret};
 
+use rbtl_core::{Event, Status};
+
 use crate::{
     Error,
     PacketSendOptions, SocketIdentity,
@@ -73,6 +75,20 @@ pub enum SocketEvent {
     Timeout,
     /// A raw udp packet that the socket failed to parse, not decoded by anything else
     Raw(Box<[u8]>),
+}
+
+impl SocketEvent {
+    pub fn to_rbtl_event(self) -> Result<Event, Self> {
+        use rbtl_core::Event;
+        match self {
+            SocketEvent::Data(b) => Ok(Event::Data(b)),
+            SocketEvent::Aborted => Ok(Event::StatusChanged(Status::Ended { by_remote: true })),
+            SocketEvent::Timeout => Ok(Event::StatusChanged(Status::Timeout)),
+            SocketEvent::Connected => Ok(Event::StatusChanged(Status::Ok)),
+            SocketEvent::Ended => Ok(Event::StatusChanged(Status::Ended { by_remote: true })),
+            s @ SocketEvent::Raw(_) => Err(s),
+        }
+    }
 }
 
 impl std::fmt::Debug for SocketEvent {

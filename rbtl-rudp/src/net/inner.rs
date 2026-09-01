@@ -9,6 +9,8 @@ use std::{
 use chacha20poly1305::{ChaCha20Poly1305, Key, KeyInit, aead::Aead};
 use x25519_dalek::{PublicKey, EphemeralSecret, SharedSecret};
 
+use rbtl_core::Status;
+
 use crate::{
     SocketEvent,
     net::protocol::{fragment::{Fragment, ack::Ack}, packet::{Packet, PacketVariant}},
@@ -71,6 +73,17 @@ pub enum SocketStatus {
 impl SocketStatus {
     pub fn is_connected(self) -> bool {
         self == SocketStatus::Connected
+    }
+
+    pub fn to_rbtl_status(self) -> Status {
+        match self {
+            SocketStatus::Connected => Status::Ok,
+            SocketStatus::SynReceived => Status::Connecting,
+            SocketStatus::SynSent(_) => Status::Connecting,
+            SocketStatus::TerminateReceived(_) => Status::Ended { by_remote: true },
+            SocketStatus::TerminateSent(_) => Status::Ended { by_remote: false },
+            SocketStatus::TimeoutError { .. } => Status::Timeout,
+        }
     }
 
     pub (crate) fn event(self) -> Option<SocketEvent> {
