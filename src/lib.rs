@@ -3,6 +3,8 @@ pub use rbtl_rudp;
 pub use rbtl_tcp;
 pub use rbtl_core;
 
+pub use paste;
+
 pub mod prelude;
 mod socket;
 mod common;

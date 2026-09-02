@@ -2,7 +2,7 @@
 /// Do not use, internal use only
 macro_rules! _rbtl_structs_impl {
     ( $([$name:ident, $struct:ty] $(,)* )* ) => {
-        paste::paste! {
+        $crate::paste::paste! {
 
             /// The struct to listen to new connections, basically what the "server" uses.
             ///
@@ -757,7 +757,7 @@ macro_rules! rbtl_structs {
             $([$name, $struct],)*
         }
 
-        paste::paste! {
+        $crate::paste::paste! {
             use $crate::serde::{Serialize, Deserialize, Serializer, Deserializer};
             use $crate::serde::de::{MapAccess, Visitor};
             use std::fmt;
@@ -837,6 +837,16 @@ macro_rules! rbtl_structs {
 #[cfg(not(feature = "serde"))]
 #[macro_export]
 /// Creates and exports RBTL structs (non-serde version)
+///
+/// # Example
+/// 
+/// ```rust
+/// // defines RBTLAsyncClient, RBTLClientConnectInfo, RBTLConnectInfo, RBTLConnector, RBTLListener, RBTLMessageId, etc
+/// rbtl::rbtl_structs! {
+///     [Rudp, rbtl_rudp::Listener]
+///     [Tcp, rbtl_tcp::Listener]
+/// }
+/// ```
 macro_rules! rbtl_structs {
     ( $([$name:ident, $struct:ty] $(,)* )* ) => {
         $crate::_rbtl_structs_impl! {
