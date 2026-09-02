@@ -421,24 +421,6 @@ macro_rules! _rbtl_structs_impl {
             }
 
             impl RBTLListener {
-                /// Create a listener with sensible defaults for each listener type
-                pub fn new_defaults() -> Result<Self, Box<dyn std::error::Error>> {
-                    Ok(Self {
-                        $( [<$name:snake>] :
-                            match <$struct as $crate::rbtl_core::Server>::new_defaults() {
-                                Ok(s) => Some(s),
-                                Err(e) => {
-                                    log::error!("error initalizing rbtl default server's {} protocol: {}",
-                                        <$struct as $crate::rbtl_core::Server>::RBTL_PROTOCOL_NAME,
-                                        e
-                                    );
-                                    None
-                                }
-                            }
-                        ,)*
-                    })
-                }
-
                 /// Create a listener with custom options for each listener type
                 pub fn new(init: RBTLServInit) -> Result<Self, Box<dyn std::error::Error>> {
                     Self::new_with(init, Default::default())

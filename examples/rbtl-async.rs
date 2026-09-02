@@ -1,4 +1,6 @@
-use rbtl::{RBTLAsyncClient, RBTLClientConnectInfo, RBTLConnectInfo, RBTLConnector, RBTLListener, RBTLMessageId};
+use rbtl::{
+    RBTLAsyncClient, RBTLClientConnectInfo, RBTLConnectInfo, RBTLServInit, RBTLConnector, RBTLListener, RBTLMessageId
+};
 
 fn spawn_client(client_connect_info: RBTLClientConnectInfo) {
     let mut connector = RBTLConnector::new(client_connect_info, Default::default()).unwrap();
@@ -56,7 +58,11 @@ fn wait_for_connect_info(listener: &mut RBTLListener) -> RBTLConnectInfo {
 }
 
 fn main() {
-    let mut listener = RBTLListener::new_defaults().unwrap();
+    let init = RBTLServInit {
+        rudp: Default::default(),
+        tcp: Default::default(),
+    };
+    let mut listener = RBTLListener::new(init).unwrap();
 
     #[allow(unused_mut)]
     let mut connect_info = wait_for_connect_info(&mut listener);

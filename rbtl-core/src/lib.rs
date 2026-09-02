@@ -117,9 +117,6 @@ pub trait Server {
     type ConnectInfo: Clone + for <'a> TryFrom<&'a [u8]> + TryInto<Vec<u8>> + Debug;
     type MessageId: Debug + Clone + PartialOrd + PartialEq + Eq;
 
-    /// Create a server/listener with sensible defaults
-    fn new_defaults() -> Result<Self, Self::StateError> where Self: Sized;
-
     /// Create a server/listener with a custom init payload, such as the port to choose, etc
     fn new<I: Into<Self::Init>>(init: I) -> Result<Self, Self::StateError> where Self: Sized;
 

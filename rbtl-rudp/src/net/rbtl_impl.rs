@@ -179,10 +179,6 @@ impl Server for Listener {
         Self::new(local_addr)
     }
 
-    fn new_defaults() -> Result<Self, Self::StateError> where Self: Sized {
-        Self::new("0.0.0.0:0")
-    }
-
     fn new_with<I: Into<Self::Init>>(local_addr: I, config: Self::ServerConfig) -> Result<Self, Self::StateError> where Self: Sized {
         let local_addr = local_addr.into();
         Self::new_with(local_addr, config)

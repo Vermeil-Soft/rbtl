@@ -214,10 +214,6 @@ impl Server for Listener {
         Self::bind_with(&*local_addr, config)
     }
 
-    fn new_defaults() -> Result<Self, Self::StateError> where Self: Sized {
-        Self::bind("0.0.0.0:0")
-    }
-
     fn process(&mut self) {
         let _r = self.process();
     }
