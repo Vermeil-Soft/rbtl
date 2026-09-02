@@ -214,7 +214,7 @@ macro_rules! _rbtl_structs_impl {
             }
         }
 
-        paste::paste! {
+        $crate::paste::paste! {
             /// A Client structure.
             ///
             /// You should probably create it from RBTLConnector, but you can also create it from `new`
