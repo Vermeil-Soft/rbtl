@@ -313,6 +313,15 @@ macro_rules! _rbtl_structs_impl {
                     }
                 }
 
+                pub fn ping(&self, seconds: f32) -> Option<f32> {
+                    match self {
+                        $( Self::$name(client) => {
+                            <<$struct as $crate::Server>::ConnectingClient as $crate::Client>::ping(client, seconds)
+                        },)*
+                        _ => None
+                    }
+                }
+
                 pub fn send<B>(&mut self, bytes: B, send_options: RBTLSendOptions) -> Result<RBTLMessageId, Box<dyn std::error::Error>>
                     where B: Into<std::sync::Arc<[u8]>> + AsRef<[u8]> + Clone {
                     match self {
