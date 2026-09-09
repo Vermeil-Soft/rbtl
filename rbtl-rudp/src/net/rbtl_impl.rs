@@ -19,7 +19,8 @@ impl Client for Socket {
     type ConnectOptions = SocketCreateConfig;
     type StateError = Error;
     type SendError = PacketSendError;
-    type Init = (Option<SocketAddr>, Option<UdpSocket>);
+    type Stem<'a> = ();
+    type CreateParams = (Option<SocketAddr>, Option<UdpSocket>);
     type SendOptions = PacketSendOptions;
 
     fn status(&self) -> Status {
@@ -39,9 +40,8 @@ impl Client for Socket {
         self.drain_events().filter_map(|e| e.to_rbtl_event().ok())
     }
 
-    fn new<I: Into<Self::Init>>(init: I, options: Self::ConnectOptions) -> Result<Self, Self::StateError> where Self: Sized {
-
-        let (socket_addr, udp_socket) = init.into();
+    fn new(_stem: &(), create_params: Self::CreateParams, options: Self::ConnectOptions) -> Result<Self, Self::StateError> where Self: Sized {
+        let (socket_addr, udp_socket) = create_params;
         let socket_addr = socket_addr.unwrap_or(SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 0));
         if let Some(socket) = udp_socket {
             Socket::connect_with_socket(socket, socket_addr, options)
@@ -50,7 +50,7 @@ impl Client for Socket {
         }
     }
 
-    fn from_connect_info(connect_info: ConnectInfo, options: Self::ConnectOptions) ->
+    fn from_connect_info(_stem: &(), connect_info: ConnectInfo, options: Self::ConnectOptions) ->
         Result<Self, Self::StateError> where Self: Sized {
         Socket::connect(connect_info.addr, options)
     }
@@ -114,13 +114,14 @@ impl Server for Listener {
 
     type ServClient = SocketShared;
     type ConnectingClient = Socket;
-    type Init = SocketAddr;
+    type Stem<'a> = ();
+    type CreateParams = SocketAddr;
+    type ServerConfig = (SocketConfig, ListenerConfig);
     type Key = SocketIdentity;
     type SendOptions = PacketSendOptions;
     type SendError = PacketSendError;
     type MessageId = u32;
     type ConnectInfo = ConnectInfo;
-    type ServerConfig = (SocketConfig, ListenerConfig);
     type StateError = Error;
 
     fn drain_events<'a>(&'a mut self) -> impl Iterator<Item=(Self::Key, Event)> + 'a {
@@ -174,13 +175,11 @@ impl Server for Listener {
         Some(Ok(ConnectInfo { addr: local_addr }))
     }
 
-    fn new<I: Into<Self::Init>>(local_addr: I) -> Result<Self, Self::StateError> where Self: Sized {
-        let local_addr = local_addr.into();
+    fn new(_stem: &(), local_addr: SocketAddr) -> Result<Self, Self::StateError> where Self: Sized {
         Self::new(local_addr)
     }
 
-    fn new_with<I: Into<Self::Init>>(local_addr: I, config: Self::ServerConfig) -> Result<Self, Self::StateError> where Self: Sized {
-        let local_addr = local_addr.into();
+    fn new_with(_stem: &(), local_addr: SocketAddr, config: Self::ServerConfig) -> Result<Self, Self::StateError> where Self: Sized {
         Self::new_with(local_addr, config)
     }
 

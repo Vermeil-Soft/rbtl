@@ -1,13 +1,15 @@
 use rbtl::{
-    RBTLAsyncClient, RBTLClientConnectInfo, RBTLConnectInfo, RBTLServInit, RBTLConnector, RBTLListener, RBTLMessageId
+    RBTLAsyncClient, RBTLClientConnectInfo, RBTLConnectInfo, RBTLServStem,
+    RBTLClientStem, RBTLServCreateParams, RBTLConnector, RBTLListener, RBTLMessageId
 };
 
 fn spawn_client(client_connect_info: RBTLClientConnectInfo) {
-    let mut connector = RBTLConnector::new(client_connect_info, Default::default()).unwrap();
+    let client_stem = RBTLClientStem { rudp: Some(()), tcp: Some(()) };
+    let mut connector = RBTLConnector::new(&client_stem, client_connect_info, Default::default()).unwrap();
     println!("(client) created");
     let mut client = None;
     for _i in 0..1000 {
-        match connector.attempt_connect() {
+        match connector.attempt_connect(&client_stem) {
             None => { std::thread::sleep(std::time::Duration::from_millis(16)); },
             Some(Ok(new_client)) => {
                 client = Some(new_client);
@@ -58,11 +60,12 @@ fn wait_for_connect_info(listener: &mut RBTLListener) -> RBTLConnectInfo {
 }
 
 fn main() {
-    let init = RBTLServInit {
+    let serv_stem = RBTLServStem { rudp: Some(()), tcp: Some(()) };
+    let create_params = RBTLServCreateParams {
         rudp: Default::default(),
         tcp: Default::default(),
     };
-    let mut listener = RBTLListener::new(init).unwrap();
+    let mut listener = RBTLListener::new(&serv_stem, create_params).unwrap();
 
     #[allow(unused_mut)]
     let mut connect_info = wait_for_connect_info(&mut listener);

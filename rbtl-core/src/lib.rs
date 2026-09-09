@@ -42,16 +42,20 @@ impl Status {
 pub trait Client {
     type Server: Server;
     type ClientConfig: Clone + Debug + Default;
-    type Init;
+    /// params necessary to create this client, (e.g. ip addr), kinda replaced by ConnectInfo
+    type CreateParams;
+    /// type necessary for all types of init for this Client.
+    type Stem<'a>;
     type ConnectOptions: Debug + Default;
     type SendOptions: Debug + Default + Clone;
     type SendError;
     type StateError: Error;
 
     /// Create a new client for this connection type.
-    fn new<I: Into<Self::Init>>(init: I, options: Self::ConnectOptions) -> Result<Self, Self::StateError> where Self: Sized;
+    fn new<'a>(stem: &'a Self::Stem<'a>, params: Self::CreateParams, options: Self::ConnectOptions) -> Result<Self, Self::StateError> where Self: Sized;
 
-    fn from_connect_info(connect_info: <Self::Server as Server>::ConnectInfo, options: Self::ConnectOptions) ->
+    /// Create a new client from a stem and a connect info
+    fn from_connect_info<'a>(stem: &'a Self::Stem<'a>, connect_info: <Self::Server as Server>::ConnectInfo, options: Self::ConnectOptions) ->
         Result<Self, Self::StateError> where Self: Sized;
 
     fn set_config(&mut self, config: Self::ClientConfig);
@@ -106,7 +110,8 @@ pub trait Server {
     const RBTL_PROTOCOL_NAME: &str;
 
     type Key: Debug + Clone + Hash + PartialEq + Eq;
-    type Init;
+    type Stem<'a>;
+    type CreateParams;
     type ServerConfig: Clone + Debug + Default;
     type ServClient: ServClient;
     type ConnectingClient;
@@ -118,9 +123,9 @@ pub trait Server {
     type MessageId: Debug + Clone + PartialOrd + PartialEq + Eq;
 
     /// Create a server/listener with a custom init payload, such as the port to choose, etc
-    fn new<I: Into<Self::Init>>(init: I) -> Result<Self, Self::StateError> where Self: Sized;
+    fn new<'a>(stem: &'a Self::Stem<'a>, create_params: Self::CreateParams) -> Result<Self, Self::StateError> where Self: Sized;
 
-    fn new_with<I: Into<Self::Init>>(init: I, server_config: Self::ServerConfig) -> Result<Self, Self::StateError> where Self: Sized;
+    fn new_with<'a>(stem: &'a Self::Stem<'a>, create_params: Self::CreateParams, server_config: Self::ServerConfig) -> Result<Self, Self::StateError> where Self: Sized;
 
     fn set_config(&mut self, config: Self::ServerConfig);
 

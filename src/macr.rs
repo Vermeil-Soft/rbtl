@@ -57,8 +57,16 @@ macro_rules! _rbtl_structs_impl {
                 $(pub [<$name:snake>] : <$struct as $crate::Server>::ServerConfig,)*
             }
 
-            pub struct RBTLServInit {
-                $(pub [<$name:snake>] : Option<<$struct as $crate::Server>::Init>,)*
+            pub struct RBTLServCreateParams {
+                $(pub [<$name:snake>] : Option<<$struct as $crate::Server>::CreateParams>,)*
+            }
+
+            pub struct RBTLServStem<'a> {
+                $(pub [<$name:snake>] : Option<<$struct as $crate::Server>::Stem<'a>>,)*
+            }
+
+            pub struct RBTLClientStem<'a> {
+                $(pub [<$name:snake>] : Option<<<$struct as $crate::Server>::ConnectingClient as $crate::Client>::Stem<'a>>,)*
             }
 
             #[derive(Clone, Debug)]
@@ -74,7 +82,7 @@ macro_rules! _rbtl_structs_impl {
             #[derive()]
             pub enum RBTLClientBuilder {
                 $( $name(
-                    <<$struct as $crate::Server>::ConnectingClient as $crate::Client>::Init,
+                    <<$struct as $crate::Server>::ConnectingClient as $crate::Client>::CreateParams,
                     <<$struct as $crate::Server>::ConnectingClient as $crate::Client>::ConnectOptions
                 ),)*
             }
@@ -95,12 +103,13 @@ macro_rules! _rbtl_structs_impl {
             }
 
             impl RBTLConnectorInner {
-                fn next(&mut self) -> Option<RBTLClient> {
+                fn next<'a>(&mut self, stem: &'a RBTLClientStem<'a>) -> Option<RBTLClient> {
                     $(
                     if !self.[<$name:snake _done>] {
                         self.[<$name:snake _done>] = true;
-                        if let Some(conn_info) = &self.connect_info.[<$name:snake>] {
+                        if let (Some(stem), Some(conn_info)) = (&stem.[<$name:snake>], &self.connect_info.[<$name:snake>]) {
                             let client = <<$struct as $crate::Server>::ConnectingClient as $crate::Client>::from_connect_info(
+                                stem,
                                 conn_info.clone(),
                                 std::mem::take(&mut self.options.[<$name:snake>])
                             );
@@ -127,13 +136,13 @@ macro_rules! _rbtl_structs_impl {
             }
 
             impl RBTLConnector {
-                pub fn new(cli_connect_info: RBTLClientConnectInfo, options: RBTLConnectOptions) -> Result<Self, $crate::Error> {
+                pub fn new<'a>(stem: &'a RBTLClientStem<'a>, cli_connect_info: RBTLClientConnectInfo, options: RBTLConnectOptions) -> Result<Self, $crate::Error> {
                     let mut inner = RBTLConnectorInner {
                         connect_info: cli_connect_info,
                         options,
                         $([<$name:snake _done>]: false,)*
                     };
-                    match inner.next() {
+                    match inner.next(stem) {
                         Some(client) => Ok(Self { inner, client: Some(client) }),
                         None => {
                             let err = $crate::Error::new(
@@ -149,7 +158,7 @@ macro_rules! _rbtl_structs_impl {
                 /// You should loop this call regularly until it returns Some; if the inner result is Ok,
                 /// you can then discard this and use the connected client. If the inner result is Err, the
                 /// client couldn't connect no matter the protocol, and the connection is impossible.
-                pub fn attempt_connect(&mut self) -> Option<Result<RBTLClient, $crate::Error>> {
+                pub fn attempt_connect<'a> (&mut self, stem: &'a RBTLClientStem<'a>) -> Option<Result<RBTLClient, $crate::Error>> {
                     let Some(client) = &mut self.client else {
                         let n = self.inner.connect_info.num_available();
                         let err = $crate::Error::new(format!("failed to connect through any of the {} protocols", n));
@@ -162,8 +171,8 @@ macro_rules! _rbtl_structs_impl {
                         $crate::rbtl_core::Status::Ok => self.client.take().map(|c| Ok(c)),
                         _ => {
                             // if we get an error, go to the next client
-                            self.client = self.inner.next();
-                            self.attempt_connect()
+                            self.client = self.inner.next(stem);
+                            self.attempt_connect(stem)
                         }
                     }
                 }
@@ -222,11 +231,15 @@ macro_rules! _rbtl_structs_impl {
             /// Sync version. You need to call "process" regularly otherwise the server will not know your messages
             /// have arrived, and you won't be able to send new ones.
             impl RBTLClient {
-                pub fn new(b: RBTLClientBuilder) -> Result<Self, Box<dyn std::error::Error>> {
+                pub fn new<'a>(b: RBTLClientBuilder, stem: &'a RBTLClientStem<'a>) -> Result<Self, Box<dyn std::error::Error>> {
                     match b {
                         $( RBTLClientBuilder::$name(init, options) => {
-                            let c = <<$struct as $crate::Server>::ConnectingClient as $crate::Client>::new(init, options)?;
-                            Ok(RBTLClient::$name(c))
+                            if let Some(stem) = &stem.[<$name:snake>] {
+                                let c = <<$struct as $crate::Server>::ConnectingClient as $crate::Client>::new(stem, init, options)?;
+                                Ok(RBTLClient::$name(c))
+                            } else {
+                                Err(Box::new($crate::Error::new("stem not available")))
+                            }
                         } ,)*
                     }
                 }
@@ -422,24 +435,26 @@ macro_rules! _rbtl_structs_impl {
 
             impl RBTLListener {
                 /// Create a listener with custom options for each listener type
-                pub fn new(init: RBTLServInit) -> Result<Self, Box<dyn std::error::Error>> {
-                    Self::new_with(init, Default::default())
+                pub fn new<'a>(stem: &'a RBTLServStem<'a>, params: RBTLServCreateParams) -> Result<Self, Box<dyn std::error::Error>> {
+                    Self::new_with(stem, params, Default::default())
                 }
 
                 /// Create a listener with custom options and server config for each listener type
-                pub fn new_with(init: RBTLServInit, config: RBTLServConfig) -> Result<Self, Box<dyn std::error::Error>> {
+                pub fn new_with<'a>(stem: &'a RBTLServStem<'a>, params: RBTLServCreateParams, config: RBTLServConfig) -> Result<Self, Box<dyn std::error::Error>> {
                     Ok(Self {
-                        $( [<$name:snake>] : init.[<$name:snake>].and_then(|init| {
-                                match <$struct as $crate::rbtl_core::Server>::new_with(init, config.[<$name:snake>]) {
-                                    Ok(s) => Some(s),
-                                    Err(e) => {
-                                        log::error!("error initalizing rbtl server's {} protocol: {}",
-                                            <$struct as $crate::rbtl_core::Server>::RBTL_PROTOCOL_NAME,
-                                            e
-                                        );
-                                        None
+                        $( [<$name:snake>] : params.[<$name:snake>].and_then(|params| {
+                                stem.[<$name:snake>].as_ref().and_then(|stem| {
+                                    match <$struct as $crate::rbtl_core::Server>::new_with(stem, params, config.[<$name:snake>]) {
+                                        Ok(s) => Some(s),
+                                        Err(e) => {
+                                            log::error!("error initalizing rbtl server's {} protocol: {}",
+                                                <$struct as $crate::rbtl_core::Server>::RBTL_PROTOCOL_NAME,
+                                                e
+                                            );
+                                            None
+                                        }
                                     }
-                                }
+                                })
                             })
                         ,)*
                     })

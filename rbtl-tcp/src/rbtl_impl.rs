@@ -27,20 +27,20 @@ fn map_event(socket_event: SocketEvent) -> Option<Event> {
     }
 }
 
-pub enum SocketInit {
+pub enum SocketCreateParams {
     Addr(Box<dyn ToSocketAddrs<Iter = IntoIter<SocketAddr>>>),
     Stream(TcpStream)
 }
 
-impl From<&'static str> for SocketInit {
+impl From<&'static str> for SocketCreateParams {
     fn from(value: &'static str) -> Self {
-        SocketInit::Addr(Box::new(value))
+        SocketCreateParams::Addr(Box::new(value))
     }
 }
 
-impl From<TcpStream> for SocketInit {
+impl From<TcpStream> for SocketCreateParams {
     fn from(value: TcpStream) -> Self {
-        SocketInit::Stream(value)
+        SocketCreateParams::Stream(value)
     }
 }
 
@@ -50,7 +50,8 @@ impl Client for Socket {
     type StateError = Error;
     type ConnectOptions = SocketConfig;
     type SendError = Error;
-    type Init = SocketInit;
+    type CreateParams = SocketCreateParams;
+    type Stem<'a> = ();
     type SendOptions = ();
 
     fn status(&self) -> Status {
@@ -70,14 +71,14 @@ impl Client for Socket {
         self.drain_events().filter_map(map_event)
     }
 
-    fn new<I: Into<Self::Init>>(init: I, options: SocketConfig) -> Result<Self, Self::StateError> where Self: Sized {
-        match init.into() {
-            SocketInit::Addr(addr) => Socket::new(&*addr, options),
-            SocketInit::Stream(stream) => Ok(Socket::new_from_tcp_stream(stream, options)),
+    fn new(_stem: &(), create_params: SocketCreateParams, options: SocketConfig) -> Result<Self, Self::StateError> where Self: Sized {
+        match create_params {
+            SocketCreateParams::Addr(addr) => Socket::new(&*addr, options),
+            SocketCreateParams::Stream(stream) => Ok(Socket::new_from_tcp_stream(stream, options)),
         }
     }
 
-    fn from_connect_info(connect_info: ConnectInfo, options: Self::ConnectOptions) ->
+    fn from_connect_info(_stem: &(), connect_info: ConnectInfo, options: Self::ConnectOptions) ->
         Result<Self, Self::StateError> where Self: Sized {
         Socket::new(connect_info.addr, options)
     }
@@ -141,7 +142,8 @@ impl Server for Listener {
     const RBTL_PROTOCOL_NAME: &str = "tcp";
 
     type ServClient = Socket;
-    type Init = Box<dyn ToSocketAddrs<Iter = IntoIter<SocketAddr>>>;
+    type Stem<'a> = ();
+    type CreateParams = SocketAddr;
     type Key = SocketAddr;
     type ConnectingClient = Socket;
     type SendOptions = ();
@@ -204,14 +206,12 @@ impl Server for Listener {
         }))
     }
 
-    fn new<I: Into<Self::Init>>(init: I) -> Result<Self, Self::StateError> where Self: Sized {
-        let local_addr = init.into();
-        Self::bind(&*local_addr)
+    fn new(_stem: &(), params: SocketAddr) -> Result<Self, Self::StateError> where Self: Sized {
+        Self::bind(&params)
     }
 
-    fn new_with<I: Into<Self::Init>>(init: I, config: Self::ServerConfig) -> Result<Self, Self::StateError> where Self: Sized {
-        let local_addr = init.into();
-        Self::bind_with(&*local_addr, config)
+    fn new_with(_stem: &(), params: SocketAddr, config: Self::ServerConfig) -> Result<Self, Self::StateError> where Self: Sized {
+        Self::bind_with(&params, config)
     }
 
     fn process(&mut self) {

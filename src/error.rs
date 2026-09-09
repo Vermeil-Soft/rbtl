@@ -7,12 +7,12 @@ pub struct Error {
 }
 
 impl Error {
-    pub fn new(msg: String) -> Self {
-        Self { msg, source: None }
+    pub fn new<I: Into<String>>(msg: I) -> Self {
+        Self { msg: msg.into(), source: None }
     }
 
-    pub fn from_cause<E: std::error::Error + 'static>(msg: String, cause: E) -> Self {
-        Self { msg, source: Some(Arc::new(cause)) }
+    pub fn from_cause<I: Into<String>, E: std::error::Error + 'static>(msg: I, cause: E) -> Self {
+        Self { msg: msg.into(), source: Some(Arc::new(cause)) }
     }
 }
 
