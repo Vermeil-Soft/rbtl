@@ -54,6 +54,7 @@ fn wait_for_connect_info(listener: &mut RBTLListener) -> RBTLConnectInfo {
         if let Some(info) = listener.connect_info() {
             return info;
         }
+        listener.post_process();
         std::thread::sleep(std::time::Duration::from_millis(16));
     }
     panic!("(serv) did not get server conn info in time")
@@ -90,6 +91,7 @@ fn main() {
             println!("(server) sending message to {} remotes...", listener.connected_len());
         }
 
+        listener.post_process();
         std::thread::sleep(std::time::Duration::from_millis(16));
     }
     drop(listener);

@@ -42,6 +42,7 @@ fn spawn_client(client_connect_info: RBTLClientConnectInfo) {
                 }
             }
         }
+        client.post_process();
         std::thread::sleep(std::time::Duration::from_millis(16));
     }
     println!("(client) shutting down");
@@ -89,6 +90,7 @@ fn main() {
             println!("(server) sending message to {} remotes...", listener.connected_len());
         }
 
+        listener.post_process();
         std::thread::sleep(std::time::Duration::from_millis(16));
     }
     drop(listener);

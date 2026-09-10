@@ -76,7 +76,11 @@ pub trait Client {
     /// Returns the average ping over the duration in milliseconds
     fn ping(&self, seconds: f32) -> Option<f32>;
 
+    /// Should be called before sending any messages or reading them, every loop
     fn process(&mut self);
+
+    /// Should be called *after* sending any messages or reading them, every loop
+    fn post_process(&mut self) {}
 
     /// End this remote, ending connection wit the server
     /// 
@@ -160,7 +164,11 @@ pub trait Server {
     /// Returns the amount of *connected* remotes. They do not have to be connected to be registered.
     fn connected_len(&self) -> usize;
 
+    /// Should be called before reading or sending any messages, every loop
     fn process(&mut self);
+
+    /// Should be called *after* sending any messages or reading them, every loop
+    fn post_process(&mut self) {}
 
     fn drain_events<'a>(&'a mut self) -> impl Iterator<Item=(Self::Key, Event)> + 'a;
 }

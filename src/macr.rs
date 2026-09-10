@@ -280,10 +280,20 @@ macro_rules! _rbtl_structs_impl {
                     }
                 }
 
+                /// Should be called every loop before reading or sending any messages
                 pub fn process(&mut self) {
                     match self {
                         $( Self::$name(client) => {
                             <<$struct as $crate::Server>::ConnectingClient as $crate::Client>::process(client)
+                        } ,)*
+                    }
+                }
+            
+                /// Should be called every loop *after* reading or sending any messages
+                pub fn post_process(&mut self) {
+                    match self {
+                        $( Self::$name(client) => {
+                            <<$struct as $crate::Server>::ConnectingClient as $crate::Client>::post_process(client)
                         } ,)*
                     }
                 }
@@ -631,6 +641,15 @@ macro_rules! _rbtl_structs_impl {
                         }
                     )*
                 }
+
+                /// Does some post-processing after reading or sending messages, every loop
+                pub fn post_process(&mut self) {
+                    $(
+                        if let Some(s) = self.[<$name:snake>].as_mut() {
+                            <$struct as $crate::Server>::post_process(s);
+                        }
+                    )*
+                }
             }
         }
 
@@ -692,6 +711,7 @@ macro_rules! _rbtl_structs_impl {
                         let mut events_guard = events.lock().expect("events poison");
                         events_guard.extend(guard.drain_events());
                         drop(events_guard);
+                        guard.post_process();
                         drop(guard);
                     }
                 })
