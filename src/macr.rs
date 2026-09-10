@@ -639,6 +639,7 @@ macro_rules! _rbtl_structs_impl {
         /// There is no "process" to call, it's all called from another thread.
         pub struct RBTLAsyncClient {
             inner: RBTLAsyncClientInner,
+            handle: Option<std::thread::JoinHandle<()>>,
             // client uses 2 Vec of events to swap and avoid reallocation, one is in a lock,
             // and the other outside of it. every time the events need to be drained, the 2 vecs are swapped
             // so that we can have a safe lifetime (outside of lock) for an iterator to the draining events
@@ -653,12 +654,14 @@ macro_rules! _rbtl_structs_impl {
 
         impl Drop for RBTLAsyncClient {
             fn drop(&mut self) {
-                self.inner.should_stop.store(true, std::sync::atomic::Ordering::Relaxed);
+                self.send_stop();
+                self.wait();
             }
         }
 
         impl RBTLAsyncClient {
-            fn spawn_thread_loop(inner: &RBTLAsyncClientInner) {
+
+            fn spawn_thread_loop(inner: &RBTLAsyncClientInner) -> std::thread::JoinHandle<()> {
                 const WAIT_DUR: std::time::Duration = std::time::Duration::from_millis(1);
 
                 let should_stop = std::sync::Arc::clone(&inner.should_stop);
@@ -666,7 +669,7 @@ macro_rules! _rbtl_structs_impl {
                 let events = std::sync::Arc::clone(&inner.events);
 
                 std::thread::spawn(move || {
-                    let mut post_end_iters: usize = 100;
+                    let mut post_end_iters: usize = 10;
                     let mut has_sent_end = false;
 
                     while post_end_iters > 0 {
@@ -691,7 +694,7 @@ macro_rules! _rbtl_structs_impl {
                         drop(events_guard);
                         drop(guard);
                     }
-                });
+                })
             }
 
             pub fn new(client: RBTLClient) -> Self {
@@ -700,8 +703,8 @@ macro_rules! _rbtl_structs_impl {
                 let should_stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
 
                 let inner = RBTLAsyncClientInner { client, should_stop, events: Default::default() };
-                Self::spawn_thread_loop(&inner);
-                Self { inner, pending_events: Default::default() }
+                let handle = Self::spawn_thread_loop(&inner);
+                Self { inner, handle: Some(handle), pending_events: Default::default() }
             }
 
             /// Accesses the underlying RBTLClient through a closure
@@ -749,6 +752,26 @@ macro_rules! _rbtl_structs_impl {
             pub fn send<B>(&mut self, bytes: B, send_options: RBTLSendOptions) -> Result<RBTLMessageId, Box<dyn std::error::Error>>
                 where B: Into<std::sync::Arc<[u8]>> + AsRef<[u8]> + Clone + 'static {
                 self.with_lock(|c| c.send(bytes, send_options))
+            }
+
+            pub fn send_stop(&self) {
+                self.inner.should_stop.store(true, std::sync::atomic::Ordering::Relaxed);
+            }
+
+            /// Wait until the async client is completed.
+            pub fn wait(&mut self) {
+                let Some(handle) = self.handle.take() else {
+                    return;
+                };
+                if let Err(_e) = handle.join() {
+                    log::error!("fatal error while waiting for rbtl async_client stop");
+                }
+            }
+
+            /// Stops the AsyncClient, and waits until everything is cleaned up
+            pub fn stop_and_wait(mut self) {
+                self.send_stop();
+                self.wait();
             }
         }
     }
