@@ -298,7 +298,7 @@ macro_rules! _rbtl_structs_impl {
                     }
                 }
 
-                pub fn drain_events<'a>(&'a mut self) -> Box<dyn Iterator<Item=rbtl_core::Event> + 'a> {
+                pub fn drain_events<'a>(&'a mut self) -> Box<dyn Iterator<Item=$crate::rbtl_core::Event> + 'a> {
                     match self {
                         $( Self::$name(client) => {
                             Box::new(<<$struct as $crate::Server>::ConnectingClient as $crate::Client>::drain_events(client))
@@ -328,7 +328,6 @@ macro_rules! _rbtl_structs_impl {
                         $( Self::$name(client) => {
                             <<$struct as $crate::Server>::ConnectingClient as $crate::Client>::ping(client, seconds)
                         },)*
-                        _ => None
                     }
                 }
 
@@ -596,8 +595,8 @@ macro_rules! _rbtl_structs_impl {
                 }
 
                 /// Drains all events of all remotes. Must call `process` beforehand
-                pub fn drain_events<'a>(&'a mut self) -> impl Iterator<Item=(RBTLKey, rbtl_core::Event)> + 'a {
-                    std::iter::empty::<(RBTLKey, rbtl_core::Event)>()
+                pub fn drain_events<'a>(&'a mut self) -> impl Iterator<Item=(RBTLKey, $crate::rbtl_core::Event)> + 'a {
+                    std::iter::empty::<(RBTLKey, $crate::rbtl_core::Event)>()
                         $(
                             .chain(
                                 self.[<$name:snake>].iter_mut().map(|s|
@@ -754,7 +753,7 @@ macro_rules! _rbtl_structs_impl {
                 self.with_lock(move |c| c.kind())
             }
 
-            pub fn drain_events<'a>(&'a mut self) -> impl Iterator<Item=rbtl_core::Event> + 'a {
+            pub fn drain_events<'a>(&'a mut self) -> impl Iterator<Item=$crate::rbtl_core::Event> + 'a {
                 let mut events_guard = self.inner.events.lock().expect("poison");
                 std::mem::swap(&mut self.pending_events, &mut events_guard);
                 drop(events_guard);
