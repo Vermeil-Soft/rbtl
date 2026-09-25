@@ -118,7 +118,7 @@ pub trait Server: Debug {
     type CreateParams: Debug;
     type ServerConfig: Clone + Debug + Default;
     type ServClient: ServClient;
-    type ConnectingClient;
+    type ConnectingClient: Client;
     type SendOptions: Default;
     type SendError;
     type StateError: ServerStateError;

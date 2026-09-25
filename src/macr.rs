@@ -7,6 +7,7 @@ macro_rules! _rbtl_structs_impl {
             /// The struct to listen to new connections, basically what the "server" uses.
             ///
             /// Sync mode: if you don't call "process" regularly,
+            #[derive(Debug)]
             pub struct RBTLListener {
                 $(pub [<$name:snake>] : Option< $struct > ,)*
             }
@@ -187,6 +188,7 @@ macro_rules! _rbtl_structs_impl {
         /// A Client, e.g. connected to a server which we don't own
         ///
         /// Basically unique, unless we are connected to multiple servers
+        #[derive(Debug)]
         pub enum RBTLClient {
             $( $name(<$struct as $crate::Server>::ConnectingClient), )*
         }
@@ -630,6 +632,16 @@ macro_rules! _rbtl_structs_impl {
                             <$struct as $crate::Server>::end(s);
                         }
                     )*
+                }
+
+                pub fn disconnect(&mut self, key: &RBTLKey) -> bool {
+                    match key {
+                        $(
+                            RBTLKey::$name(k) => self.[<$name:snake>].as_mut()
+                                .map(|s| <$struct as $crate::Server>::disconnect(s, k))
+                                .unwrap_or(false),
+                        )*
+                    }
                 }
 
                 /// Processes event to be drained at a later time. Must be called regularly
