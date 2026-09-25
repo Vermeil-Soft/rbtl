@@ -191,6 +191,14 @@ impl Server for Listener {
         self.send_end();
     }
 
+    fn disconnect(&mut self, k: &Self::Key) -> bool {
+        if let Some(r) = self.remotes.get_mut(k) {
+            r.send_end().is_ok()
+        } else {
+            false
+        }
+    }
+
     fn send_all<B>(&mut self, bytes: B, send_opts: Self::SendOptions) -> Result<(), Self::SendError>
             where B: Into<Arc<[u8]>> + AsRef<[u8]> + Clone {
         self.send_data(bytes, send_opts)

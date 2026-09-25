@@ -39,7 +39,7 @@ impl Status {
     }
 }
 
-pub trait Client {
+pub trait Client: Debug {
     type Server: Server;
     type ClientConfig: Clone + Debug + Default;
     /// params necessary to create this client, (e.g. ip addr), kinda replaced by ConnectInfo
@@ -90,7 +90,7 @@ pub trait Client {
     fn drain_events<'a>(&'a mut self) -> impl Iterator<Item=Event> + 'a;
 }
 
-pub trait ServClient {
+pub trait ServClient: Debug {
     type Server: Server;
 
     fn send<B: Into<Arc<[u8]>> + AsRef<[u8]> + Clone>(&mut self, bytes: B, send_options: <Self::Server as Server>::SendOptions)
@@ -104,7 +104,7 @@ pub trait ServClient {
     fn status(&self) -> Status;
 }
 
-pub trait Server {
+pub trait Server: Debug {
     /// RBTL_PROTOCOL_ID: must be unique for each implementation. As a guideline, "public" implementations start from 0,
     /// while "private" ones go from 255 descending.
     ///
@@ -115,7 +115,7 @@ pub trait Server {
 
     type Key: Debug + Clone + Hash + PartialEq + Eq;
     type Stem<'a>;
-    type CreateParams;
+    type CreateParams: Debug;
     type ServerConfig: Clone + Debug + Default;
     type ServClient: ServClient;
     type ConnectingClient;
@@ -152,6 +152,14 @@ pub trait Server {
     /// * Some(Err(_)) => an error happened and we are unable to generate a connect_info
     /// * Some(Ok(_)) => we can use the connect info
     fn connect_info(&self) -> Option<Result<Self::ConnectInfo, Self::StateError>>;
+
+    /// Disconnect the remote.
+    ///
+    /// The reason or implementation is up to the implementor, you may drop immediatly the remote,
+    /// or keep it in a "disconnected" state a few seconds.
+    ///
+    /// Should return true if the remote existed and was connected, false otherwise.
+    fn disconnect(&mut self, k: &Self::Key) -> bool;
 
     /// End all the remotes
     /// 

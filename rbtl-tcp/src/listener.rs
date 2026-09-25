@@ -12,6 +12,7 @@ use crate::{SeqId, Error, Socket, SocketStatus, socket::{SocketConfig, SocketEve
 pub struct ListenerConfig {
 }
 
+#[derive(Debug)]
 pub struct Listener {
     pub (crate) listener_config: ListenerConfig,
     pub (crate) socket_config: SocketConfig,

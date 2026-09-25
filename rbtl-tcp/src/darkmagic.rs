@@ -16,3 +16,9 @@ impl<T> SyncUnsafeCell<T> {
 
 unsafe impl<T> Sync for SyncUnsafeCell<T> {}
 unsafe impl<T> Send for SyncUnsafeCell<T> {}
+
+impl<T> std::fmt::Debug for SyncUnsafeCell<T> where T: std::fmt::Debug {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.get().fmt(f)
+    }
+}

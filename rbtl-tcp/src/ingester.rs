@@ -7,6 +7,7 @@ use crate::{
     }
 };
 
+#[derive(Debug)]
 pub (crate) struct Ingester {
     incomplete: Option<IncomingIncomplete>,
     pub (crate) results: Vec<IngesterResult>,

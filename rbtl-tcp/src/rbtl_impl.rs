@@ -226,4 +226,13 @@ impl Server for Listener {
     fn end(&mut self) {
         self.send_end();
     }
+
+    fn disconnect(&mut self, k: &Self::Key) -> bool {
+        if let Some(r) = self.get_mut(*k) {
+            r.send_end();
+            true
+        } else {
+            false
+        }
+    }
 }

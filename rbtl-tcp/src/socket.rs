@@ -79,6 +79,7 @@ impl SocketStatus {
     }
 }
 
+#[derive(Debug)]
 pub struct Socket {
     pub (crate) tcp_stream: Arc<OnceLock<SyncUnsafeCell<Result<TcpStream, IoError>>>>,
     ingester: Ingester,
