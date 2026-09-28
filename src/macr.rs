@@ -94,6 +94,15 @@ macro_rules! _rbtl_structs_impl {
                 $(pub [<$name:snake _done>]: bool,)*
             }
 
+            impl RBTLConnectorInner {
+                pub (self) fn curr_kind(&self) -> Option<RBTLProtocolKind> {
+                    $(if !self.[<$name:snake _done>] {
+                        return Some(RBTLProtocolKind::$name)
+                    })*
+                    None
+                }
+            }
+
             /// A struct to help you connect to a remote.
             ///
             /// Will try all the possible ways to connect to this remote, and if none of them are available
@@ -103,12 +112,19 @@ macro_rules! _rbtl_structs_impl {
                 inner: RBTLConnectorInner,
             }
 
+
             impl RBTLConnectorInner {
                 fn next<'a>(&mut self, stem: &'a RBTLClientStem<'a>) -> Option<RBTLClient> {
                     $(
                     if !self.[<$name:snake _done>] {
                         self.[<$name:snake _done>] = true;
                         if let (Some(stem), Some(conn_info)) = (&stem.[<$name:snake>], &self.connect_info.[<$name:snake>]) {
+                            log::info!(
+                                target: "rbtl_macr",
+                                "trying to connect through protocol {}: {:?}",
+                                <$struct as $crate::Server>::RBTL_PROTOCOL_NAME,
+                                conn_info
+                            );
                             let client = <<$struct as $crate::Server>::ConnectingClient as $crate::Client>::from_connect_info(
                                 stem,
                                 conn_info.clone(),
@@ -118,6 +134,7 @@ macro_rules! _rbtl_structs_impl {
                                 Ok(client) => return Some(RBTLClient::$name(client)),
                                 Err(e) => {
                                     log::error!(
+                                        target: "rbtl_macr",
                                         "protocol {} had initialization error: {}",
                                         <$struct as $crate::Server>::RBTL_PROTOCOL_NAME,
                                         e
@@ -126,6 +143,7 @@ macro_rules! _rbtl_structs_impl {
                             }
                         } else {
                             log::info!(
+                                target: "rbtl_macr",
                                 "protocol {} not provided in connect_info",
                                 <$struct as $crate::Server>::RBTL_PROTOCOL_NAME
                             )
@@ -171,6 +189,11 @@ macro_rules! _rbtl_structs_impl {
                         $crate::rbtl_core::Status::Connecting => None,
                         $crate::rbtl_core::Status::Ok => self.client.take().map(|c| Ok(c)),
                         _ => {
+                            if let Some(kind) = self.inner.curr_kind() {
+                                log::info!(target: "rbtl_macr", "failed to connected through protocol {}, trying next one",
+                                    kind.rbtl_protocol_name()
+                                );
+                            }
                             // if we get an error, go to the next client
                             self.client = self.inner.next(stem);
                             self.attempt_connect(stem)
@@ -198,7 +221,17 @@ macro_rules! _rbtl_structs_impl {
             $( $name(<$struct as $crate::Server>::Key) ,)*
         }
 
-        #[derive(Clone, Debug, PartialOrd, PartialEq, Eq)]
+        impl std::fmt::Display for RBTLKey {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
+                match self {
+                    $( RBTLKey::$name(k) => {
+                        write!(f, "{}:{:?}", <$struct as $crate::Server>::RBTL_PROTOCOL_NAME, k)
+                    }),*
+                }
+            }
+        }
+
+        #[derive(Clone, Debug, Hash, PartialOrd, Ord, PartialEq, Eq)]
         pub enum RBTLMessageId {
             $( $name(<$struct as $crate::Server>::MessageId) ,)*
         }
@@ -467,7 +500,8 @@ macro_rules! _rbtl_structs_impl {
                                     match <$struct as $crate::rbtl_core::Server>::new_with(stem, params, config.[<$name:snake>]) {
                                         Ok(s) => Some(s),
                                         Err(e) => {
-                                            log::error!("error initalizing rbtl server's {} protocol: {}",
+                                            log::error!(target: "rbtl_macr",
+                                                "error initalizing rbtl server's {} protocol: {}",
                                                 <$struct as $crate::rbtl_core::Server>::RBTL_PROTOCOL_NAME,
                                                 e
                                             );
@@ -795,7 +829,7 @@ macro_rules! _rbtl_structs_impl {
                     return;
                 };
                 if let Err(_e) = handle.join() {
-                    log::error!("fatal error while waiting for rbtl async_client stop");
+                    log::error!(target: "rbtl_macr", "fatal error while waiting for rbtl async_client stop");
                 }
             }
 

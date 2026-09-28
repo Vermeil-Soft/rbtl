@@ -48,7 +48,7 @@ pub trait Client: Debug {
     type Stem<'a>;
     type ConnectOptions: Debug + Default;
     type SendOptions: Debug + Default + Clone;
-    type SendError;
+    type SendError: Error;
     type StateError: Error;
 
     /// Create a new client for this connection type.
@@ -120,11 +120,11 @@ pub trait Server: Debug {
     type ServClient: ServClient;
     type ConnectingClient: Client;
     type SendOptions: Default;
-    type SendError;
+    type SendError: Error;
     type StateError: ServerStateError;
     // struct to indicate how to connect to this listener
     type ConnectInfo: Clone + for <'a> TryFrom<&'a [u8]> + TryInto<Vec<u8>> + Debug;
-    type MessageId: Debug + Clone + PartialOrd + PartialEq + Eq;
+    type MessageId: Debug + Clone + PartialOrd + PartialEq + Eq + Hash + PartialOrd + Ord;
 
     /// Create a server/listener with a custom init payload, such as the port to choose, etc
     fn new<'a>(stem: &'a Self::Stem<'a>, create_params: Self::CreateParams) -> Result<Self, Self::StateError> where Self: Sized;
