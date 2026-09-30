@@ -1,6 +1,7 @@
 use byteorder::{BigEndian, ByteOrder};
 
 use std::{
+    collections::VecDeque,
     io::{Error as IoError, ErrorKind as IoErrorKind, Read, Write},
     sync::{Arc, OnceLock},
     time::Duration,
@@ -92,7 +93,7 @@ pub struct Socket {
     last_recv_heartbeat: Instant,
     last_sent_heartbeat: Instant,
 
-    events: Vec<SocketEvent>,
+    events: VecDeque<SocketEvent>,
 }
 
 pub (crate) const MSG_TYPE_DATA_ID: u8 = 0;
@@ -126,7 +127,7 @@ impl Socket {
             last_recv_heartbeat: now,
             last_sent_heartbeat: now,
             status: SocketStatus::Connected,
-            events: Vec::new(),
+            events: VecDeque::new(),
         }
     }
 
@@ -153,7 +154,7 @@ impl Socket {
             last_recv_heartbeat: now,
             last_sent_heartbeat: now,
             status: SocketStatus::Connecting,
-            events: Vec::new(),
+            events: VecDeque::new(),
         }
     }
 
@@ -258,13 +259,13 @@ impl Socket {
         if !new_status.is_over() || !self.status.is_over() {
             // if either the new or old status is not "over", update the events.
             // this prevents Timeout from being overwritten by RemoteEnded, or LocalEnded overwritten by RemoteEnded...
-            self.events.push(SocketEvent::Status(new_status.clone()));
+            self.events.push_back(SocketEvent::Status(new_status.clone()));
             self.status = new_status;
         }
     }
 
     pub (crate) fn insert_event(&mut self, socket_event: SocketEvent) {
-        self.events.push(socket_event);
+        self.events.push_back(socket_event);
     }
 
     pub (crate) fn has_events(&self) -> bool {
@@ -275,7 +276,7 @@ impl Socket {
         for ingester_result in self.ingester.results.drain(..) {
             match ingester_result {
                 IngesterResult::Data(seq_id, data) => {
-                    self.events.push(SocketEvent::Data(data.into_boxed_slice()));
+                    self.events.push_back(SocketEvent::Data(data.into_boxed_slice()));
                     if let Some(tcp_stream) = Self::stream_raw_mut(&mut self.tcp_stream) {
                         Self::stream_send_status(tcp_stream, seq_id);
                     }
@@ -285,7 +286,7 @@ impl Socket {
                 },
                 IngesterResult::Error(err_msg) => {
                     let new_status = SocketStatus::Error(Error::new(err_msg));
-                    self.events.push(SocketEvent::Status(new_status.clone()));
+                    self.events.push_back(SocketEvent::Status(new_status.clone()));
                     self.status = new_status;
                 },
                 IngesterResult::SeqIdOk(seq_id) => {
@@ -403,6 +404,10 @@ impl Socket {
 
     pub fn drain_events<'a>(&'a mut self) -> impl 'a + Iterator<Item=SocketEvent> {
         self.events.drain(..)
+    }
+
+    pub fn next_event(&mut self) -> Option<SocketEvent> {
+        self.events.pop_front()
     }
 
     pub fn is_seq_id_received(&self, seq_id: SeqId) -> bool {

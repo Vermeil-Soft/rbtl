@@ -121,6 +121,12 @@ impl Listener {
         })
     }
 
+    pub fn next_event(&mut self) -> Option<(SocketAddr, SocketEvent)> {
+        self.remotes.iter_mut().flat_map(|(addr, socket)| {
+            socket.next_event().map(move |event| (*addr, event))
+        }).next()
+    }
+
     /// Send a "end" message to ALL remotes
     pub fn send_end(&mut self) {
         for socket in self.remotes.values_mut() {

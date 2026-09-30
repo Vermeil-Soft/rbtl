@@ -71,6 +71,10 @@ impl Client for Socket {
         self.drain_events().filter_map(map_event)
     }
 
+    fn next_event(&mut self) -> Option<Event> {
+        self.next_event().and_then(map_event)
+    }
+
     fn new(_stem: &(), create_params: SocketCreateParams, options: SocketConfig) -> Result<Self, Self::StateError> where Self: Sized {
         match create_params {
             SocketCreateParams::Addr(addr) => Socket::new(&*addr, options),
@@ -156,6 +160,11 @@ impl Server for Listener {
     fn drain_events<'a>(&'a mut self) -> impl Iterator<Item=(Self::Key, Event)> + 'a {
         self.drain_events()
             .filter_map(|(id, ev)| map_event(ev).map(|ev| (id, ev)))
+    }
+
+    fn next_event(&mut self) -> Option<(Self::Key, Event)> {
+        self.next_event()
+            .and_then(|(id, ev)| map_event(ev).map(|ev| (id, ev)))
     }
 
     fn get(&self, k: &Self::Key) -> Option<&Self::ServClient> {

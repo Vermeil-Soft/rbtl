@@ -40,6 +40,10 @@ impl Client for Socket {
         self.drain_events().filter_map(|e| e.to_rbtl_event().ok())
     }
 
+    fn next_event(&mut self) -> Option<Event> {
+        self.next_event().and_then(|e| e.to_rbtl_event().ok())
+    }
+
     fn new(_stem: &(), create_params: Self::CreateParams, options: Self::ConnectOptions) -> Result<Self, Self::StateError> where Self: Sized {
         let (socket_addr, udp_socket) = create_params;
         let socket_addr = socket_addr.unwrap_or(SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 0));
@@ -127,6 +131,11 @@ impl Server for Listener {
     fn drain_events<'a>(&'a mut self) -> impl Iterator<Item=(Self::Key, Event)> + 'a {
         self.drain_events()
             .filter_map(|(id, ev)| ev.to_rbtl_event().ok().map(|ev| (id, ev)))
+    }
+
+    fn next_event(&mut self) -> Option<(Self::Key, Event)> {
+        self.next_event()
+            .and_then(|(id, ev)| ev.to_rbtl_event().ok().map(|ev| (id, ev)))
     }
 
     fn get(&self, k: &Self::Key) -> Option<&Self::ServClient> {

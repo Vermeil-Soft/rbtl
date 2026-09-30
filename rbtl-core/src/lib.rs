@@ -87,6 +87,8 @@ pub trait Client: Debug {
     /// The same is done when this is dropped, but here there is time to make sure the server has received it
     fn end(&mut self);
 
+    fn next_event(&mut self) -> Option<Event>;
+
     fn drain_events<'a>(&'a mut self) -> impl Iterator<Item=Event> + 'a;
 }
 
@@ -179,4 +181,6 @@ pub trait Server: Debug {
     fn post_process(&mut self) {}
 
     fn drain_events<'a>(&'a mut self) -> impl Iterator<Item=(Self::Key, Event)> + 'a;
+
+    fn next_event(&mut self) -> Option<(Self::Key, Event)>;
 }
