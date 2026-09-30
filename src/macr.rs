@@ -341,6 +341,14 @@ macro_rules! _rbtl_structs_impl {
                     }
                 }
 
+                pub fn next_event(&mut self) -> Option<$crate::rbtl_core::Event> {
+                    match self {
+                        $( Self::$name(client) => {
+                            <<$struct as $crate::Server>::ConnectingClient as $crate::Client>::next_event(client)
+                        } ,)*
+                    }
+                }
+
                 pub fn end(&mut self) {
                     match self {
                         $( Self::$name(client) => {
@@ -643,6 +651,20 @@ macro_rules! _rbtl_structs_impl {
                         )*
                 }
 
+                /// Gets the next event from any remote. Must be called in a loop until it returns None for best result.
+                pub fn next_event(&mut self) -> Option<(RBTLKey, $crate::rbtl_core::Event)> {
+                    std::iter::empty::<(RBTLKey, $crate::rbtl_core::Event)>()
+                        $(
+                            .chain(
+                                self.[<$name:snake>].iter_mut().flat_map(|s|
+                                    <$struct as $crate::Server>::next_event(s)
+                                )
+                                .map(|(key, event)| (RBTLKey::$name(key), event) )
+                            )
+                        )*
+                        .next()
+                }
+
                 /// Return the connection info for this server.
                 /// 
                 /// In theory, if this is sent to some clients, they should be able to connect to this remote.
@@ -799,11 +821,32 @@ macro_rules! _rbtl_structs_impl {
                 self.with_lock(move |c| c.kind())
             }
 
+            /// Drain events
+            ///
+            /// Note: only use `drain_events` OR `next_event`, using both at the same time may cause issues,
+            /// such as needing to drain twice to get all the messages at once.
             pub fn drain_events<'a>(&'a mut self) -> impl Iterator<Item=$crate::rbtl_core::Event> + 'a {
+                if !self.pending_events.is_empty() {
+                    return self.pending_events.drain(..)
+                }
                 let mut events_guard = self.inner.events.lock().expect("poison");
                 std::mem::swap(&mut self.pending_events, &mut events_guard);
                 drop(events_guard);
                 self.pending_events.drain(..)
+            }
+
+            /// Get the next event
+            /// 
+            /// Internally, the lock is only used once to drain all events from the thread, and until the messages
+            /// are processed.
+            pub fn next_event(&mut self) -> Option<$crate::rbtl_core::Event> {
+                if self.pending_events.is_empty() {
+                    let mut events_guard = self.inner.events.lock().expect("poison");
+                    std::mem::swap(&mut self.pending_events, &mut events_guard);
+                    drop(events_guard);
+                    self.pending_events.reverse();
+                }
+                self.pending_events.pop()
             }
 
             pub fn end(&mut self) {
@@ -823,7 +866,7 @@ macro_rules! _rbtl_structs_impl {
                 self.inner.should_stop.store(true, std::sync::atomic::Ordering::Relaxed);
             }
 
-            /// Wait until the async client is completed.
+            /// Stops the thread until the async client is completed.
             pub fn wait(&mut self) {
                 let Some(handle) = self.handle.take() else {
                     return;
