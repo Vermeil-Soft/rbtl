@@ -94,15 +94,6 @@ macro_rules! _rbtl_structs_impl {
                 $(pub [<$name:snake _done>]: bool,)*
             }
 
-            impl RBTLConnectorInner {
-                pub (self) fn curr_kind(&self) -> Option<RBTLProtocolKind> {
-                    $(if !self.[<$name:snake _done>] {
-                        return Some(RBTLProtocolKind::$name)
-                    })*
-                    None
-                }
-            }
-
             /// A struct to help you connect to a remote.
             ///
             /// Will try all the possible ways to connect to this remote, and if none of them are available
@@ -114,10 +105,16 @@ macro_rules! _rbtl_structs_impl {
 
 
             impl RBTLConnectorInner {
+                pub (self) fn curr_kind(&self) -> Option<RBTLProtocolKind> {
+                    $(if !self.[<$name:snake _done>] {
+                        return Some(RBTLProtocolKind::$name)
+                    })*
+                    None
+                }
+
                 fn next<'a>(&mut self, stem: &'a RBTLClientStem<'a>) -> Option<RBTLClient> {
                     $(
                     if !self.[<$name:snake _done>] {
-                        self.[<$name:snake _done>] = true;
                         if let (Some(stem), Some(conn_info)) = (&stem.[<$name:snake>], &self.connect_info.[<$name:snake>]) {
                             log::info!(
                                 target: "rbtl_macr",
@@ -152,6 +149,13 @@ macro_rules! _rbtl_structs_impl {
                     )*
                     None
                 }
+
+                fn set_done(&mut self) {
+                    $(if !self.[<$name:snake _done>] {
+                        self.[<$name:snake _done>] = true;
+                        return;
+                    })*
+                }
             }
 
             impl RBTLConnector {
@@ -185,20 +189,29 @@ macro_rules! _rbtl_structs_impl {
                     };
                     let _r = client.process();
                     let status = client.status();
-                    match status {
-                        $crate::rbtl_core::Status::Connecting => None,
-                        $crate::rbtl_core::Status::Ok => self.client.take().map(|c| Ok(c)),
-                        _ => {
-                            if let Some(kind) = self.inner.curr_kind() {
-                                log::info!(target: "rbtl_macr", "failed to connected through protocol {}, trying next one",
-                                    kind.rbtl_protocol_name()
-                                );
-                            }
-                            // if we get an error, go to the next client
-                            self.client = self.inner.next(stem);
-                            self.attempt_connect(stem)
+                    let err_msg = match status {
+                        $crate::rbtl_core::Status::Connecting => return None,
+                        $crate::rbtl_core::Status::Ok => return self.client.take().map(|c| Ok(c)),
+                        $crate::rbtl_core::Status::Timeout => {
+                            format!("timeout")
+                        },
+                        $crate::rbtl_core::Status::Ended { .. } => {
+                            format!("connection refused")
+                        },
+                        $crate::rbtl_core::Status::Error(err) => {
+                            format!("connection error: {}", err)
                         }
+                    };
+                    if let Some(kind) = self.inner.curr_kind() {
+                        log::warn!(target: "rbtl_macr", "failed to connect through protocol {}, trying next one. (err = {})",
+                            kind.rbtl_protocol_name(),
+                            err_msg
+                        );
                     }
+                    // if we get an error set the protocol as done and go to the next client
+                    self.inner.set_done();
+                    self.client = self.inner.next(stem);
+                    self.attempt_connect(stem)
                 }
             }
         }

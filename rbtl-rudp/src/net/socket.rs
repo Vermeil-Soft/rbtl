@@ -287,11 +287,11 @@ impl<K: SocketKind> SocketCommon<K> {
             },
             PacketVariant::SynAck { pub_key } => {
                 if let SocketStatus::SynSent(_) = self.socket.status {
+                    self.socket.other_pub_key = PublicKey::from(pub_key);
+                    self.socket.secret.apply(&self.socket.other_pub_key);
                     log::info!("connected to remote {}, ids: (ours) {} <-> {} (theirs)",
                         self.remote_addr(), self.self_identity(), self.remote_identity()
                     );
-                    self.socket.other_pub_key = PublicKey::from(pub_key);
-                    self.socket.secret.apply(&self.socket.other_pub_key);
                     self.set_status(SocketStatus::Connected);
                 } else {
                     log::warn!("received synack while the status isn't synsent for {}", self.remote_identity());
