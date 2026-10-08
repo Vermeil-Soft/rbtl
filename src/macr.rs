@@ -141,10 +141,11 @@ macro_rules! _rbtl_structs_impl {
                         } else {
                             log::info!(
                                 target: "rbtl_macr",
-                                "protocol {} not provided in connect_info",
+                                "protocol {} not provided in received connect_info",
                                 <$struct as $crate::Server>::RBTL_PROTOCOL_NAME
                             )
                         }
+                        self.set_done();
                     };
                     )*
                     None
