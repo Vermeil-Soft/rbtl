@@ -149,7 +149,7 @@ impl<B: FragmentDataRef> FragmentAssembler<B> {
     ///
     /// Returns an Error if all the fragments do not have the same frag_total,
     /// or if "build_message_from_fragments" encountered an error
-    fn transform_message(&mut self, seq_id: SeqId, shared_secret: Option<&SharedSecret>, now: Instant) -> Result<(), ()> {
+    fn transform_message(&mut self, seq_id: SeqId, shared_secret: Option<&SharedSecret>, sender_pub_key: &[u8; 32], now: Instant) -> Result<(), ()> {
         let Some(fragment_set) = self.pending_fragments.get_mut(&seq_id) else {
             panic!("seq_id {} does not exist in fragment_combiner.fragments", seq_id);
         };
@@ -169,7 +169,7 @@ impl<B: FragmentDataRef> FragmentAssembler<B> {
             (Some(shared_secret), true) => {
                 let encrypted = build_data_from_fragments(fragments.into_iter().map(|(_k, v)| v))?;
                 let cipher = ChaCha20Poly1305::new_from_slice(shared_secret.as_bytes()).unwrap();
-                let nonce = nonce_from_seq_id(seq_id);
+                let nonce = nonce_from_seq_id(seq_id, sender_pub_key);
                 cipher.decrypt(&nonce.into(), &*encrypted)
                     .map_err(|_| ())?
                     .into_boxed_slice()
@@ -191,7 +191,8 @@ impl<B: FragmentDataRef> FragmentAssembler<B> {
     /// Push a fragment into the internal queue.
     ///
     /// If the fragment is the last to arrive
-    pub fn push(&mut self, fragment: Fragment<B>, now: Instant, shared_secret: Option<&SharedSecret>) {
+    /// `sender_pub_key` is the public key of the remote that sent the fragment, used to decrypt it
+    pub fn push(&mut self, fragment: Fragment<B>, now: Instant, shared_secret: Option<&SharedSecret>, sender_pub_key: &[u8; 32]) {
         let seq_id = fragment.seq_id;
         let frag_total = fragment.frag_total;
         let frag_meta = fragment.frag_set_flags;
@@ -218,14 +219,16 @@ impl<B: FragmentDataRef> FragmentAssembler<B> {
                 // don't have the same frag_total, but we still return true to "clear" the queue.
                 fragments.len() > frag_total as usize
             } else {
-                // We are trying to push a fragment to something that is already complete.
-                // So let's do nothing instead.
+                // We are trying to push a fragment to something that is already complete: the remote
+                // is resending because it hasn't received our complete ack yet. Allow acks to be
+                // sent again, otherwise if our acks were lost the remote would resend forever.
+                fragment_set.acks_sent_count = 0;
                 false
             }
         };
 
         if try_transform {
-            if let Err(()) = self.transform_message(seq_id, shared_secret, now) {
+            if let Err(()) = self.transform_message(seq_id, shared_secret, sender_pub_key, now) {
                 // If we fail to transform a message (set is corrupted), we want to remove it.
                 log::warn!("set seq_id={} is corrupted", seq_id);
                 self.pending_fragments.remove(&seq_id)
@@ -246,8 +249,7 @@ impl<B: FragmentDataRef> FragmentAssembler<B> {
             let should_send_ack: bool = if fragment_set.can_send_ack() && fragment_set.acks_sent_count < 2 {
                 match fragment_set.last_sent_ack {
                     Some(last_iter) => {
-                        debug_assert!(now > last_iter);
-                        now - last_iter >= crate::consts::ACK_SEND_INTERVAL
+                        now.saturating_duration_since(last_iter) >= crate::consts::ACK_SEND_INTERVAL
                     },
                     // if there are no previous recordings of an ack being sent, send it right away
                     None => true,
@@ -282,7 +284,7 @@ fn fragment_combiner_success_clear() {
     ];
     let mut fragment_combiner = FragmentAssembler::new();
     for fragment in fragments {
-        fragment_combiner.push(fragment, Instant::now(), None);
+        fragment_combiner.push(fragment, Instant::now(), None, &[0xBB; 32]);
     }
 
     let out_message = fragment_combiner.next_out_message().expect("out msg");
@@ -300,7 +302,7 @@ fn fragment_combiner_success_encrypted() {
     let cypher = ChaCha20Poly1305::new(shared_secret.as_bytes().into());
     let plaintext = vec![0, 1, 2, 3];
     let bytes = cypher.encrypt(
-        &[0x07, 0x00, 0x00, 0x00, 0x07, 0x00, 0x00, 0x00, 0x07, 0x00, 0x00, 0x00].into(),
+        &nonce_from_seq_id(7, &[0xBB; 32]).into(),
         plaintext.as_ref()
     ).unwrap();
     let fragments: Vec<Fragment<Box<[u8]>>> = vec![
@@ -308,7 +310,7 @@ fn fragment_combiner_success_encrypted() {
     ];
     let mut fragment_combiner = FragmentAssembler::new();
     for fragment in fragments {
-        fragment_combiner.push(fragment, Instant::now(), Some(&shared_secret));
+        fragment_combiner.push(fragment, Instant::now(), Some(&shared_secret), &[0xBB; 32]);
     }
 
     let out_message = fragment_combiner.next_out_message().expect("out msg");

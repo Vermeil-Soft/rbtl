@@ -13,8 +13,11 @@ use crate::{
 };
 
 pub (self) struct SentDataSet<D: AsRef<[u8]> + 'static + Clone> {
+    /// The bytes exactly as they were fragmented and sent (ciphertext if encrypted)
     pub (self) data: D,
     pub (self) frag_total: u8,
+    /// The flags of the original send, re-used on every resend
+    pub (self) flags: FragmentSetFlags,
     pub (self) expiration: Option<Instant>,
     /// (iteration_n, ack_data)
     pub (self) last_received_ack: Option<(Instant, Ack<BoxedSlice<u8>>)>,
@@ -39,10 +42,11 @@ impl<D: AsRef<[u8]> + 'static + Clone> std::fmt::Debug for SentDataSet<D> {
 }
 
 impl<D: AsRef<[u8]> + 'static + Clone> SentDataSet<D> {
-    pub fn new(data: D, frag_total: u8, now: Instant, options: &PacketSendOptions) -> SentDataSet<D> {
+    pub fn new(data: D, frag_total: u8, flags: FragmentSetFlags, now: Instant, options: &PacketSendOptions) -> SentDataSet<D> {
         SentDataSet {
             data,
             frag_total,
+            flags,
             expiration: options.expiration.map(|d| now + d),
             last_received_ack: None,
             last_sent_packet: now,
@@ -84,9 +88,7 @@ impl<D: AsRef<[u8]> + 'static + Clone> SentDataSet<D> {
 
     /// Returns whether or not all acks have been received by the other party
     pub (self) fn resend_packets(&mut self, seq_id: SeqId, now: Instant, socket: &mut SocketInner) -> Option<Instant> {
-        let mut frag_flags = FragmentSetFlags::new();
-        frag_flags.set_expire(self.expiration.is_some());
-        let (fragments, frag_total) = build_fragments_from_bytes(self.data.as_ref(), seq_id, frag_flags)
+        let (fragments, frag_total) = build_fragments_from_bytes(self.data.as_ref(), seq_id, self.flags)
             .expect("Unreachable: message has been sent once but couldn't be resent because too big");
         
         let mut last_complete_ack: Option<Instant> = None;
@@ -102,7 +104,9 @@ impl<D: AsRef<[u8]> + 'static + Clone> SentDataSet<D> {
                 let mut complete = true;
                 for frag_id in ack_missing_frags {
                     complete = false;
-                    let _r = socket.send_fragment_ref(&all_fragments[frag_id as usize], now);
+                    // the ack comes from the remote, so never trust its frag ids blindly
+                    let Some(fragment) = all_fragments.get(frag_id as usize) else { continue };
+                    let _r = socket.send_fragment_ref(fragment, now);
                     log::trace!("resending seq_id={} frag_id={} because we received incomplete ack", seq_id, frag_id);
                 }
                 if complete {
@@ -130,7 +134,7 @@ pub (crate) struct SentDataTracker<D: AsRef<[u8]> + 'static + Clone> {
     pub (self) sets: HashMap<u32, SentDataSet<D>>,
 }
 
-impl<D: AsRef<[u8]> + 'static + Clone> SentDataTracker<D> {
+impl<D: AsRef<[u8]> + 'static + Clone + From<Vec<u8>>> SentDataTracker<D> {
     pub fn new() -> SentDataTracker<D> {
         SentDataTracker {
             sets: Default::default(),
@@ -146,35 +150,38 @@ impl<D: AsRef<[u8]> + 'static + Clone> SentDataTracker<D> {
         }
         flags.set_key(send_options.key);
 
-        #[allow(unused)]
-        // a Vec with no capacity does not allocate and can be optimized away
-        // this is just to please the borrow checker
-        let mut encrypted: Vec<u8> = Vec::with_capacity(0); 
-        let bytes_to_send = if send_options.encryption {
+        // the data stored for resends must be exactly what is sent the first time,
+        // so encrypted messages are stored encrypted
+        let encrypted: Option<Vec<u8>> = if send_options.encryption {
             let Some(secret) = socket.secret.shared() else {
                 return Err(PacketSendError::NoEncryptionKey)
             };
             let cipher = ChaCha20Poly1305::new_from_slice(secret.as_bytes()).unwrap();
-            let nonce = nonce_from_seq_id(seq_id);
-            encrypted = cipher.encrypt(&nonce.into(), data.as_ref())
+            let nonce = nonce_from_seq_id(seq_id, socket.self_pub_key.as_bytes());
+            let encrypted = cipher.encrypt(&nonce.into(), data.as_ref())
                 .map_err(|_| PacketSendError::EncryptionError)?;
-            encrypted.as_ref()
+            Some(encrypted)
         } else {
-            data.as_ref()
+            None
         };
+        let bytes_to_send: &[u8] = encrypted.as_deref().unwrap_or(data.as_ref());
         let (fragments, frag_total) = build_fragments_from_bytes(bytes_to_send, seq_id, flags)?;
         for fragment in fragments {
             let _r = socket.send_fragment(fragment, now);
         }
 
         if send_options.key {
-            self.insert(seq_id, data.into(), frag_total, now, &send_options);
+            let stored: D = match encrypted {
+                Some(encrypted) => D::from(encrypted),
+                None => data.into(),
+            };
+            self.insert(seq_id, stored, frag_total, flags, now, &send_options);
         }
         Ok(())
     }
 
-    pub fn insert(&mut self, seq_id: SeqId, data: D, frag_total: u8, now: Instant, options: &PacketSendOptions) {
-        let sent_data_set = SentDataSet::new(data, frag_total, now, options);
+    pub fn insert(&mut self, seq_id: SeqId, data: D, frag_total: u8, flags: FragmentSetFlags, now: Instant, options: &PacketSendOptions) {
+        let sent_data_set = SentDataSet::new(data, frag_total, flags, now, options);
 
         if self.sets.insert(seq_id, sent_data_set).is_some() {
             panic!("seq_id {:?} is already registered in sent_data_tracker", seq_id);

@@ -54,7 +54,8 @@ impl<'a> Iterator for FragmentGenerator<'a> {
         let data = self.iterator.next();
         data.map(|data| {
             let current_frag = self.next_frag;
-            self.next_frag += 1;
+            // wraps after the 256th fragment (id 255), which is the last one possible
+            self.next_frag = self.next_frag.wrapping_add(1);
             Fragment {
                 seq_id: self.seq_id,
                 frag_total: self.frag_total,

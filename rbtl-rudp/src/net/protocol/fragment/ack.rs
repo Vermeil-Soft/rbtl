@@ -9,17 +9,14 @@ pub type Acks<D> = Vec<(u32, Ack<D>)>;
 /// e.g. 0b0100: frag 2 has arrived, frag 0+1+3 haven't arrived.
 pub struct Ack<D: AsRef<[u8]> + 'static>(D);
 
+/// Number of bytes needed to hold one bit per fragment. There are frag_total + 1 fragments.
 fn ack_size_from_frag_total(frag_total: u8) -> usize {
-    if frag_total % 8 == 0 {
-        (frag_total / 8) as usize
-    } else {
-        (frag_total / 8 + 1) as usize
-    }
+    (frag_total as usize + 1).div_ceil(8)
 }
 
 #[cfg(test)]
 pub (self) fn frag_ids_received_from_ack<I: Iterator<Item=u8>>(ack_bytes: I, frag_total: u8) -> impl Iterator<Item=u8> {
-    ack_bytes.enumerate().flat_map(move |(index, bits): (usize, u8)| {
+    ack_bytes.take(32).enumerate().flat_map(move |(index, bits): (usize, u8)| {
         (0..8).filter_map(move |bit_index| {
             debug_assert!(index < 32); // 31 * 8 + 7 is max value at most in u8
             let bit = 1 << bit_index;
@@ -38,7 +35,8 @@ pub (self) fn frag_ids_received_from_ack<I: Iterator<Item=u8>>(ack_bytes: I, fra
 }
 
 pub (self) fn frag_ids_missing_from_ack<'a, I: Iterator<Item=u8> + 'a>(ack_bytes: I, frag_total: u8) -> impl Iterator<Item=u8> + 'a {
-    ack_bytes.enumerate().flat_map(move |(index, bits): (usize, u8)| {
+    // the ack comes from the remote and may be longer than the 32 bytes needed for 256 frags
+    ack_bytes.take(32).enumerate().flat_map(move |(index, bits): (usize, u8)| {
         (0..8).filter_map(move |bit_index| {
             debug_assert!(index < 32); // 31 * 8 + 7 is max value at most in u8
             let bit = 1 << bit_index;
@@ -151,4 +149,27 @@ fn ack_ser_deser() {
     assert_eq!(ack_vec1, vec1);
     assert_eq!(ack_vec2, vec2);
     assert_eq!(ack_vec3, vec3);
+}
+#[test]
+fn ack_size_frag_total_multiple_of_8() {
+    // 1 fragment and 9 fragments are the edge cases: 1 and 2 bytes
+    assert_eq!(ack_size_from_frag_total(0), 1);
+    assert_eq!(ack_size_from_frag_total(7), 1);
+    assert_eq!(ack_size_from_frag_total(8), 2);
+    assert_eq!(ack_size_from_frag_total(255), 32);
+    // receiving the last frag of 9 first must not panic, and the others are reported missing
+    let ack = Ack::create_from_frag_ids([8u8].into_iter(), 8);
+    let missing: Vec<u8> = ack.into_missing_iter(8).collect();
+    assert_eq!(missing, vec![0, 1, 2, 3, 4, 5, 6, 7]);
+    // the reverse: frag 8 is the missing one
+    let ack = Ack::create_from_frag_ids(0..8u8, 8);
+    let missing: Vec<u8> = ack.into_missing_iter(8).collect();
+    assert_eq!(missing, vec![8]);
+}
+
+#[test]
+fn ack_oversized_from_remote() {
+    // a remote may send more bytes than needed, it must not panic
+    let ack = Ack(vec![0u8; 100].into_boxed_slice());
+    assert_eq!(ack.into_missing_iter(255).count(), 256);
 }

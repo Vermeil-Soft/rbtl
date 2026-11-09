@@ -157,10 +157,16 @@ impl PacketSendOptions {
     }
 }
 
-pub (crate) fn nonce_from_seq_id(seq_id: SeqId) -> [u8; 12] {
+/// Nonce for the message `seq_id` sent by the owner of `sender_pub_key`.
+///
+/// Both sides share the same key, so the sender must be part of the nonce, otherwise seq_id N from
+/// one side and seq_id N from the other would reuse the same (key, nonce) pair. Using the sender's
+/// public key rather than a role (client/server) keeps this working when both sides are peers.
+///
+/// Layout: [seq_id (LE, 4 bytes)][first 8 bytes of the sender's public key]
+pub (crate) fn nonce_from_seq_id(seq_id: SeqId, sender_pub_key: &[u8; 32]) -> [u8; 12] {
     let mut a = [0; 12];
     a[0..4].copy_from_slice(&seq_id.to_le_bytes());
-    a[4..8].copy_from_slice(&seq_id.to_le_bytes());
-    a[8..12].copy_from_slice(&seq_id.to_le_bytes());
+    a[4..12].copy_from_slice(&sender_pub_key[0..8]);
     a
 }

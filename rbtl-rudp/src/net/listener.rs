@@ -151,7 +151,10 @@ impl Listener {
             Entry::Vacant(vacant) => {
                 // buffer len is used for debug/log purposes
                 match SocketShared::new_incoming(self.udp_socket.clone(), packet, remote_addr) {
-                    Err(SocketCreateError::IoError(io_error)) => return Err(io_error),
+                    Err(SocketCreateError::IoError(io_error)) => {
+                        // failing to answer one remote must not stop us from processing the others
+                        log::warn!("failed to accept incoming connection from {}: {}", remote_addr, io_error);
+                    },
                     Err(SocketCreateError::NotSyn) => {
                         log::trace!("received unexpected message from unknown remote {}", remote_addr);
                         /* ignore */
@@ -187,7 +190,9 @@ impl Listener {
                         // https://stackoverflow.com/questions/15228272/what-would-cause-a-connectionreset-on-an-udp-socket
                         IoErrorKind::ConnectionReset => { continue; },
                         err_kind => {
-                            panic!("received other unexpected net error {:?}", err_kind)
+                            // stop reading for this tick, but don't take the whole listener down
+                            log::error!("listener received unexpected net error {:?}", err_kind);
+                            done = true;
                         }
                     }
                 },
@@ -251,7 +256,10 @@ impl Listener {
         }
         self.process_all_incoming()?;
         for socket in self.remotes.values_mut() {
-            socket.inner_tick()?;
+            // an error for one remote must not prevent ticking the others
+            if let Err(e) = socket.inner_tick() {
+                log::warn!("error while processing remote {}: {}", socket.remote_addr(), e);
+            }
         }
         Ok(())
     }

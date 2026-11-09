@@ -94,6 +94,10 @@ pub struct Socket {
     last_sent_heartbeat: Instant,
 
     events: VecDeque<SocketEvent>,
+
+    /// Bytes waiting to be written: the stream is non-blocking, so a write can be partial and the rest
+    /// must be sent later, otherwise the stream gets out of sync.
+    out_buffer: Vec<u8>,
 }
 
 pub (crate) const MSG_TYPE_DATA_ID: u8 = 0;
@@ -101,6 +105,8 @@ pub (crate) const MSG_TYPE_STATUS_ID: u8 = 1;
 pub (crate) const MSG_TYPE_HEARTBEAT_ID: u8 = 2;
 pub (crate) const MSG_TYPE_DATA_HEAD_LEN: usize = 8;
 pub (crate) const MSG_TYPE_STATUS_HEAD_LEN: usize = 4;
+/// Above this many unsent bytes, `send_data` refuses new messages: the remote isn't reading fast enough.
+pub (crate) const MAX_OUT_BUFFER_LEN: usize = 16 * 1024 * 1024;
 
 impl Socket {
 
@@ -109,9 +115,15 @@ impl Socket {
         let _r = tcp_stream.set_nonblocking(true);
     }
 
+    /// Panics if the stream has no peer address (e.g. it is already disconnected), see `new_from_accepted`.
     pub fn new_from_tcp_stream(tcp_stream: TcpStream, options: SocketConfig) -> Self {
+        let peer_addr = tcp_stream.peer_addr().expect("tcp stream has no peer addr");
+        Self::new_from_accepted(tcp_stream, peer_addr, options)
+    }
+
+    /// Same as `new_from_tcp_stream`, but with the peer addr already known (e.g. from `TcpListener::accept`)
+    pub fn new_from_accepted(tcp_stream: TcpStream, peer_addr: SocketAddr, options: SocketConfig) -> Self {
         Self::prepare_tcp_stream(&tcp_stream);
-        let peer_addr = tcp_stream.peer_addr().unwrap();
         let lock = OnceLock::new();
         let _r = lock.set(SyncUnsafeCell::new(Ok(tcp_stream)));
         let tcp_stream = Arc::new(lock);
@@ -128,6 +140,7 @@ impl Socket {
             last_sent_heartbeat: now,
             status: SocketStatus::Connected,
             events: VecDeque::new(),
+            out_buffer: Vec::new(),
         }
     }
 
@@ -135,8 +148,9 @@ impl Socket {
         let tcp_stream_lock = Arc::new(OnceLock::new());
         let peer_addr = socket_addr.clone();
         let lock = Arc::clone(&tcp_stream_lock);
+        let timeout_ms = options.timeout_ms;
         std::thread::spawn(move || {
-            let tcp_stream = TcpStream::connect_timeout(&socket_addr, Duration::from_millis(options.timeout_ms));
+            let tcp_stream = TcpStream::connect_timeout(&socket_addr, Duration::from_millis(timeout_ms));
             if let Ok(tcp_stream) = &tcp_stream {
                 Self::prepare_tcp_stream(&tcp_stream);
             }
@@ -149,12 +163,13 @@ impl Socket {
             out_seq_id: 0,
             last_ok_seq_id: None,
             ping_tracker: PingTracker::new(),
-            config: SocketConfig::new(),
+            config: options,
             ingester: Ingester::new(),
             last_recv_heartbeat: now,
             last_sent_heartbeat: now,
             status: SocketStatus::Connecting,
             events: VecDeque::new(),
+            out_buffer: Vec::new(),
         }
     }
 
@@ -226,25 +241,56 @@ impl Socket {
     }
 
     /// Omit of &mut self is needed for borrow checker purposes
-    fn stream_send_status(stream: &mut TcpStream, seq_id: u32) {
-        let mut out_bytes = vec![0u8; 5];
+    fn queue_status(out_buffer: &mut Vec<u8>, seq_id: u32) {
+        let mut out_bytes = [0u8; 5];
         out_bytes[0] = MSG_TYPE_STATUS_ID;
         BigEndian::write_u32(&mut out_bytes[1..5], seq_id);
-        let _r = stream.write(&out_bytes);
+        out_buffer.extend_from_slice(&out_bytes);
+    }
+
+    /// Writes as much of the pending out buffer as the stream accepts right now
+    fn flush_out_buffer(&mut self) -> Result<(), IoError> {
+        let Some(tcp_stream) = Self::stream_raw_mut(&mut self.tcp_stream) else {
+            return Ok(())
+        };
+        let mut written = 0;
+        let mut result = Ok(());
+        while written < self.out_buffer.len() {
+            match tcp_stream.write(&self.out_buffer[written..]) {
+                Ok(0) => {
+                    result = Err(IoError::new(IoErrorKind::WriteZero, "tcp stream accepted 0 bytes"));
+                    break;
+                },
+                Ok(n) => written += n,
+                Err(e) if e.kind() == IoErrorKind::WouldBlock => break,
+                Err(e) if e.kind() == IoErrorKind::Interrupted => continue,
+                Err(e) => {
+                    result = Err(e);
+                    break;
+                },
+            }
+        }
+        self.out_buffer.drain(..written);
+        result
     }
 
     fn internal_send_data(&mut self, seq_id: u32, bytes: &[u8]) -> Result<(), Error> {
-        let Some(tcp_stream) = self.raw_mut() else {
+        if self.raw().is_none() {
             return Err(Error::new(format!("not connected yet")))
         };
-        let mut out_bytes = vec![0u8; 9 + bytes.len()];
-        out_bytes[0] = MSG_TYPE_DATA_ID;
-        BigEndian::write_u32(&mut out_bytes[1..5], seq_id);
-        BigEndian::write_u32(&mut out_bytes[5..9], bytes.len() as u32);
-        out_bytes[9..].copy_from_slice(bytes);
-        tcp_stream.write(&out_bytes)
-            .map_err(|e| Error::from_cause(format!("tcp write err"), e))?;
+        if self.out_buffer.len() + bytes.len() > MAX_OUT_BUFFER_LEN {
+            return Err(Error::new(format!("tcp out buffer is full ({} bytes pending)", self.out_buffer.len())))
+        }
+        let mut head = [0u8; 9];
+        head[0] = MSG_TYPE_DATA_ID;
+        BigEndian::write_u32(&mut head[1..5], seq_id);
+        BigEndian::write_u32(&mut head[5..9], bytes.len() as u32);
+        self.out_buffer.extend_from_slice(&head);
+        self.out_buffer.extend_from_slice(bytes);
         self.ping_tracker.ping(seq_id);
+        // try to send right away to not add latency; whatever doesn't fit is sent in `process`
+        self.flush_out_buffer()
+            .map_err(|e| Error::from_cause(format!("tcp write err"), e))?;
         Ok(())
     }
 
@@ -277,9 +323,7 @@ impl Socket {
             match ingester_result {
                 IngesterResult::Data(seq_id, data) => {
                     self.events.push_back(SocketEvent::Data(data.into_boxed_slice()));
-                    if let Some(tcp_stream) = Self::stream_raw_mut(&mut self.tcp_stream) {
-                        Self::stream_send_status(tcp_stream, seq_id);
-                    }
+                    Self::queue_status(&mut self.out_buffer, seq_id);
                 },
                 IngesterResult::Heartbeat => {
                     self.last_recv_heartbeat = now;
@@ -304,9 +348,7 @@ impl Socket {
         const HEARTBEAT_INTERVAL: Duration = Duration::from_millis(1000);
         let sent_diff = now.saturating_duration_since(self.last_sent_heartbeat);
         if sent_diff >= HEARTBEAT_INTERVAL {
-            if let Some(tcp_stream) = Self::stream_raw_mut(&mut self.tcp_stream) {
-                let _r = tcp_stream.write(&[MSG_TYPE_HEARTBEAT_ID]);
-            }
+            self.out_buffer.push(MSG_TYPE_HEARTBEAT_ID);
             self.last_sent_heartbeat = now;
         }
     }
@@ -344,6 +386,8 @@ impl Socket {
             self.set_status(SocketStatus::Timeout);
         }
         self.maybe_send_heartbeat(now);
+        // a read error takes precedence, it is usually the more meaningful one
+        let r = r.and(self.flush_out_buffer());
         match r {
             Ok(()) => {},
             Err(io_error) => {
@@ -385,6 +429,8 @@ impl Socket {
     }
 
     pub fn send_end(&mut self) {
+        // best effort to get pending messages out before closing our side
+        let _r = self.flush_out_buffer();
         if let Some(tcp_stream) = self.raw_mut() {
             let _r = tcp_stream.shutdown(std::net::Shutdown::Write);
         }

@@ -273,3 +273,12 @@ fn build_frags_from_data_fail() {
     let data = vec!(0; MAX_FRAGMENTS_IN_MESSAGE * MAX_FRAGMENT_INNER_SIZE + 1);
     assert!(build_fragments_from_bytes(data.as_ref(), seq_id, FragmentSetFlags(1)).is_err());
 }
+#[test]
+fn build_max_fragments_from_data() {
+    let data = vec![0u8; MAX_FRAGMENTS_IN_MESSAGE * MAX_FRAGMENT_INNER_SIZE];
+    let (frags, frag_total) = build_fragments_from_bytes(&data, 1, FragmentSetFlags::new()).expect("built fragments");
+    assert_eq!(frag_total, 255);
+    let ids: Vec<u8> = frags.map(|f| f.frag_id).collect();
+    assert_eq!(ids.len(), MAX_FRAGMENTS_IN_MESSAGE);
+    assert_eq!(ids.last(), Some(&255));
+}

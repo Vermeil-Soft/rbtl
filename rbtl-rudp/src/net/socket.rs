@@ -214,7 +214,7 @@ impl<K: SocketKind> SocketCommon<K> {
             self.ping_tracker.ping(self.next_local_seq_id);
         }
         let seq_id = self.next_local_seq_id;
-        self.next_local_seq_id += 1;
+        self.next_local_seq_id = self.next_local_seq_id.wrapping_add(1);
         match self.sent_data_tracker.send_data(seq_id, data, self.cached_now, send_options, &mut self.socket) {
             Ok(()) => Ok(seq_id),
             Err(e) => Err(e)
@@ -265,7 +265,8 @@ impl<K: SocketKind> SocketCommon<K> {
         match packet.packet_variant {
             PacketVariant::Fragment(f) => {
                 log::trace!("received fragment {:?}", f);
-                self.fragment_assembler.push(f, self.cached_now, self.socket.secret.shared());
+                let sender_pub_key = self.socket.other_pub_key.as_bytes();
+                self.fragment_assembler.push(f, self.cached_now, self.socket.secret.shared(), sender_pub_key);
                 if let Some((_seq_id, data)) = self.fragment_assembler.next_out_message() {
                     self.events.push_back(SocketEvent::Data(data));
                 }
@@ -330,7 +331,13 @@ impl<K: SocketKind> SocketCommon<K> {
         self.cached_now = now.unwrap_or_else(|| Instant::now());
     }
 
+    /// Does all the per-tick work: timeouts, acks, heartbeats, syn and data resends.
+    ///
+    /// A send error does not stop the tick: everything is still attempted, and the first error is returned.
     pub (crate) fn inner_tick(&mut self) -> IoResult<()> {
+        let mut first_err: Option<IoError> = None;
+        let mut keep_err = |r: IoResult<()>| if let Err(e) = r { first_err.get_or_insert(e); };
+
         let acks_to_send = self.fragment_assembler.tick(self.cached_now);
         let last_received_ago: Duration = self.cached_now.saturating_duration_since(self.last_received_message);
         if last_received_ago >= self.config.timeout_delay && !self.socket.status.is_finished() {
@@ -340,12 +347,12 @@ impl<K: SocketKind> SocketCommon<K> {
         }
         if !self.socket.status.is_disconnected() {
             for (seq_id, ack) in acks_to_send {
-                self.socket.send_ack(seq_id, ack, self.cached_now)?;
+                keep_err(self.socket.send_ack(seq_id, ack, self.cached_now));
             }
         }
         if self.status().is_connected() {
-            if self.cached_now - self.socket.last_sent_message > self.config.heartbeat_delay {
-                self.socket.send_heartbeat(self.cached_now)?;
+            if self.cached_now.saturating_duration_since(self.socket.last_sent_message) > self.config.heartbeat_delay {
+                keep_err(self.socket.send_heartbeat(self.cached_now));
             }
         } else { 
             if let SocketStatus::SynSent(last_sent) = self.status() {
@@ -354,7 +361,7 @@ impl<K: SocketKind> SocketCommon<K> {
                 if self.cached_now > last_sent + Duration::from_secs(3) {
                     // every 3 seconds (we incremented tick once before this call so 0 is out)
                     // resend a "syn" to attempt to connect.
-                    self.socket.send_syn(self.cached_now)?;
+                    keep_err(self.socket.send_syn(self.cached_now));
                     self.set_status(SocketStatus::SynSent(self.cached_now))
                 }
             }
@@ -362,7 +369,10 @@ impl<K: SocketKind> SocketCommon<K> {
         if !self.socket.status.is_disconnected() {
             self.sent_data_tracker.next_tick(self.cached_now, &mut self.socket);
         }
-        Ok(())
+        match first_err {
+            Some(e) => Err(e),
+            None => Ok(()),
+        }
     }
 
     /// Terminates and consumes the socket, by sending a "Ended" event to the remote.
@@ -523,7 +533,9 @@ impl SocketCommon<SocketKindUnique> {
                     match err.kind() {
                         IoErrorKind::WouldBlock => { done = true },
                         err_kind => {
-                            log::error!("SingleSocket: Received other unexpected net error {:?}", err_kind)
+                            // stop reading for this tick rather than risk spinning on a persistent error
+                            log::error!("SingleSocket: Received other unexpected net error {:?}", err_kind);
+                            done = true;
                         }
                     }
                 },

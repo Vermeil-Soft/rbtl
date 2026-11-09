@@ -72,15 +72,22 @@ impl PingTracker {
 
     /// Returns the average ping over the given past duration
     pub (crate) fn avg_ping(&self, seconds: f32) -> Option<f32> {
-        let mut tot = 0.0;
-        let mut n: u64 = 0;
-        let Some(old_date) = Instant::now().checked_sub(Duration::from_secs_f32(seconds)) else {
-            return None;
-        };
-        if seconds <= 0.0 {
+        // also catches NaN, which `Duration::from_secs_f32` would panic on, as would negatives
+        if !(seconds > 0.0) {
             return self.recorded_pings.get(0).map(|(p, _)| *p as f32);
         }
-        for (ping, _) in self.recorded_pings.iter().take_while(|(_, instant)| *instant >= old_date) {
+        let Some(old_date) = Duration::try_from_secs_f32(seconds).ok().and_then(|d| Instant::now().checked_sub(d)) else {
+            // too far in the past to represent: every record qualifies
+            return self.avg_of(self.recorded_pings.iter());
+        };
+        self.avg_of(self.recorded_pings.iter().take_while(|(_, instant)| *instant >= old_date))
+    }
+
+    /// Average of the given records, or the latest ping if there are none
+    fn avg_of<'a>(&self, records: impl Iterator<Item=&'a (u32, Instant)>) -> Option<f32> {
+        let mut tot = 0.0;
+        let mut n: u64 = 0;
+        for (ping, _) in records {
             tot += *ping as f32;
             n += 1;
         }
@@ -94,5 +101,14 @@ impl PingTracker {
     /// Returns the lastest ping in ms, and when it arrived.
     pub (crate) fn last_ping_info(&self) -> Option<(u32, Instant)> {
         self.recorded_pings.get(0).copied()
+    }
+}
+#[test]
+fn avg_ping_any_seconds() {
+    let mut p = PingTracker::new();
+    assert_eq!(p.avg_ping(1.0), None);
+    p.register_ping(42, Instant::now());
+    for seconds in [-1.0, 0.0, f32::NAN, f32::INFINITY, 1e30, 1.0] {
+        assert_eq!(p.avg_ping(seconds), Some(42.0), "seconds={}", seconds);
     }
 }
