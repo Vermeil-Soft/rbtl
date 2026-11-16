@@ -1,7 +1,56 @@
 
 
-/// (seq_id, Ack)
-pub type Acks<D> = Vec<(u32, Ack<D>)>;
+use std::time::Duration;
+
+/// (seq_id, timing, Ack)
+pub type Acks<D> = Vec<(u32, AckTiming, Ack<D>)>;
+
+/// Sent with every ack, so the remote can compute an accurate ping from it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub (crate) struct AckTiming {
+    /// How long we waited between receiving the last fragment of the set and sending this ack.
+    ///
+    /// None if it is too long to be encoded.
+    pub (crate) delay: Option<Duration>,
+    /// Whether the last fragment received was a resend. The remote can't know when that resend was sent,
+    /// so it must not use this ack to compute the ping.
+    pub (crate) after_resend: bool,
+}
+
+impl AckTiming {
+    const AFTER_RESEND_BIT: u16 = 0x8000;
+    const DELAY_MASK: u16 = 0x7FFF;
+    const DELAY_UNIT_MICROS: u64 = 200;
+
+    /// Encoded as a u16: the highest bit is `after_resend`, the 15 others are the delay in units of 200µs,
+    /// so at most ~6.5s. The highest value means the delay was longer than that (or unknown).
+    pub (crate) fn to_u16(self) -> u16 {
+        let units = match self.delay {
+            Some(delay) => (delay.as_micros() / Self::DELAY_UNIT_MICROS as u128).min(Self::DELAY_MASK as u128) as u16,
+            None => Self::DELAY_MASK,
+        };
+        units | if self.after_resend { Self::AFTER_RESEND_BIT } else { 0 }
+    }
+
+    pub (crate) fn from_u16(v: u16) -> Self {
+        let units = v & Self::DELAY_MASK;
+        Self {
+            delay: (units != Self::DELAY_MASK).then(|| Duration::from_micros(units as u64 * Self::DELAY_UNIT_MICROS)),
+            after_resend: v & Self::AFTER_RESEND_BIT != 0,
+        }
+    }
+}
+
+#[test]
+fn ack_timing_ser_de() {
+    let t = AckTiming { delay: Some(Duration::from_micros(1234)), after_resend: false };
+    assert_eq!(AckTiming::from_u16(t.to_u16()), AckTiming { delay: Some(Duration::from_micros(1200)), after_resend: false });
+    let t = AckTiming { delay: Some(Duration::ZERO), after_resend: true };
+    assert_eq!(AckTiming::from_u16(t.to_u16()), t);
+    // too long to be encoded
+    let t = AckTiming { delay: Some(Duration::from_secs(60)), after_resend: false };
+    assert_eq!(AckTiming::from_u16(t.to_u16()).delay, None);
+}
 
 #[derive(Debug, Clone)]
 /// Represents a series of a bits that each represent whether or not the frag has arrived

@@ -10,16 +10,15 @@ use std::{
 
 use x25519_dalek::{PublicKey, EphemeralSecret, SharedSecret};
 
-use rbtl_core::{Event, Status};
+use rbtl_core::{Event, Status, utils::PingTracker};
 
 use crate::{
-    Error,
+    Error, consts,
     PacketSendOptions, SocketIdentity,
     net::{
         connect_info::ConnectInfo,
         common::{PacketSendError, SocketConfig, SeqId},
         inner::{SocketInner, SocketStatus},
-        ping_tracker::PingTracker,
         protocol::{
             fragment::{ack::Ack, frag_assembly::FragmentAssembler},
             packet::{Packet, PacketVariant, UdpBytes},
@@ -69,8 +68,9 @@ pub enum SocketEvent {
     Connected,
     /// Connection was aborted unexpectedly by the other end (not the same as Timeout or Ended)
     Aborted,
-    /// Connection was ended peacefully by the other end
-    Ended,
+    /// Connection was ended: peacefully by the other end (`by_remote: true`),
+    /// or by us with `send_end`, `abort` or drop (`by_remote: false`)
+    Ended { by_remote: bool },
     /// We haven't got any packet coming from the other for a certain amount of time
     Timeout,
     /// A raw udp packet that the socket failed to parse, not decoded by anything else
@@ -85,7 +85,7 @@ impl SocketEvent {
             SocketEvent::Aborted => Ok(Event::StatusChanged(Status::Ended { by_remote: true })),
             SocketEvent::Timeout => Ok(Event::StatusChanged(Status::Timeout)),
             SocketEvent::Connected => Ok(Event::StatusChanged(Status::Ok)),
-            SocketEvent::Ended => Ok(Event::StatusChanged(Status::Ended { by_remote: true })),
+            SocketEvent::Ended { by_remote } => Ok(Event::StatusChanged(Status::Ended { by_remote })),
             s @ SocketEvent::Raw(_) => Err(s),
         }
     }
@@ -97,7 +97,7 @@ impl std::fmt::Debug for SocketEvent {
             SocketEvent::Data(d) => write!(f, "Data({:?} bytes)", d.len()),
             SocketEvent::Connected => write!(f, "Connected"),
             SocketEvent::Aborted => write!(f, "Aborted"),
-            SocketEvent::Ended => write!(f, "Ended"),
+            SocketEvent::Ended { by_remote } => write!(f, "Ended {{ by_remote: {} }}", by_remote),
             SocketEvent::Timeout => write!(f, "Timeout"),
             SocketEvent::Raw(d) => write!(f, "Raw({:?} bytes)", d.len()),
         }
@@ -129,6 +129,8 @@ pub struct SocketCommon<K: SocketKind> {
     /// store a "now()" to avoid calling the system super often using `std::time::Instant::now()`
     pub (self) cached_now: Instant,
     pub (self) last_received_message: Instant,
+    /// Delay before resending a syn while we are connecting
+    pub (self) syn_resend_delay: Duration,
 
     pub (crate) config: SocketConfig,
 
@@ -257,11 +259,16 @@ impl<K: SocketKind> SocketCommon<K> {
     }
 
     pub (crate) fn add_packet(&mut self, packet: Packet<OwnedSlice<u8, Box<[u8]>>>) {
-        self.last_received_message = self.cached_now;
         log::trace!("received packet {:?} from remote {}", packet, self.remote_identity());
         let Some(packet) = self.check_packet_origin(packet) else {
             return;
         };
+        if !self.socket.verify_control_mac(&packet) {
+            log::debug!("dropping control packet from {} with a missing, invalid or replayed mac", self.remote_addr());
+            return;
+        }
+        // only now that we know the packet is from the remote: otherwise anyone could keep the connection alive
+        self.last_received_message = self.cached_now;
         match packet.packet_variant {
             PacketVariant::Fragment(f) => {
                 log::trace!("received fragment {:?}", f);
@@ -271,9 +278,14 @@ impl<K: SocketKind> SocketCommon<K> {
                     self.events.push_back(SocketEvent::Data(data));
                 }
             },
-            PacketVariant::Ack { seq_id, slice } => {
-                log::trace!("received ack({}) {:?}", seq_id, slice);
-                self.ping_tracker.pong(seq_id);
+            PacketVariant::Ack { seq_id, timing, slice } => {
+                log::trace!("received ack({}) {:?} {:?}", seq_id, timing, slice);
+                match timing.delay {
+                    // the remote answered our original send: the round trip is known, minus the time the remote held the ack
+                    Some(delay) if !timing.after_resend => self.ping_tracker.pong_with_delay(seq_id, delay),
+                    // the remote answered a resend, and we don't know which one (Karn's algorithm), or the delay is unknown
+                    _ => self.ping_tracker.cancel(seq_id),
+                }
                 self.sent_data_tracker.receive_ack(seq_id, slice, self.cached_now);
             },
             PacketVariant::Heartbeat => {
@@ -302,7 +314,7 @@ impl<K: SocketKind> SocketCommon<K> {
             PacketVariant::End { last_seq_id } => {
                 log::trace!("received End({})", last_seq_id);
                 self.set_status(SocketStatus::TerminateReceived(self.cached_now));
-                self.events.push_back(SocketEvent::Ended);
+                self.events.push_back(SocketEvent::Ended { by_remote: true });
             },
             PacketVariant::Abort { last_seq_id } => {
                 log::trace!("received Abort({})", last_seq_id);
@@ -346,8 +358,8 @@ impl<K: SocketKind> SocketCommon<K> {
             self.set_status(SocketStatus::TimeoutError { error_since: self.cached_now, duration: last_received_ago });
         }
         if !self.socket.status.is_disconnected() {
-            for (seq_id, ack) in acks_to_send {
-                keep_err(self.socket.send_ack(seq_id, ack, self.cached_now));
+            for (seq_id, timing, ack) in acks_to_send {
+                keep_err(self.socket.send_ack(seq_id, timing, ack, self.cached_now));
             }
         }
         if self.status().is_connected() {
@@ -357,11 +369,11 @@ impl<K: SocketKind> SocketCommon<K> {
         } else { 
             if let SocketStatus::SynSent(last_sent) = self.status() {
                 // we're attempting to connect..
-                // but if we haven't received an answer for 3 seconds, the message might have been missed and we'll resend it.
-                if self.cached_now > last_sent + Duration::from_secs(3) {
-                    // every 3 seconds (we incremented tick once before this call so 0 is out)
-                    // resend a "syn" to attempt to connect.
+                // but if we haven't received an answer in time, the syn or the synack might have been lost: resend it.
+                // The delay doubles every time, so a remote that is really not there isn't flooded.
+                if self.cached_now > last_sent + self.syn_resend_delay {
                     keep_err(self.socket.send_syn(self.cached_now));
+                    self.syn_resend_delay = std::cmp::min(self.syn_resend_delay * 2, consts::SYN_RESEND_MAX_DELAY);
                     self.set_status(SocketStatus::SynSent(self.cached_now))
                 }
             }
@@ -434,6 +446,7 @@ impl SocketCommon<SocketKindShared> {
             ping_tracker: PingTracker::new(),
             cached_now: now,
             last_received_message: now,
+            syn_resend_delay: consts::SYN_RESEND_FIRST_DELAY,
 
             _phantom: PhantomData,
             config: SocketConfig::new(),
@@ -471,6 +484,7 @@ impl SocketCommon<SocketKindUnique> {
             next_local_seq_id: 0,
             cached_now: now,
             last_received_message: now,
+            syn_resend_delay: consts::SYN_RESEND_FIRST_DELAY,
 
             config: options.socket_config,
             _phantom: PhantomData,

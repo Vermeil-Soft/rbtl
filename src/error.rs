@@ -3,7 +3,7 @@ use std::sync::Arc;
 #[derive(Debug, Clone)]
 pub struct Error {
     pub msg: String,
-    pub source: Option<Arc<dyn std::error::Error>>,
+    pub source: Option<Arc<dyn std::error::Error + Send + Sync>>,
 }
 
 impl Error {
@@ -11,7 +11,7 @@ impl Error {
         Self { msg: msg.into(), source: None }
     }
 
-    pub fn from_cause<I: Into<String>, E: std::error::Error + 'static>(msg: I, cause: E) -> Self {
+    pub fn from_cause<I: Into<String>, E: std::error::Error + Send + Sync + 'static>(msg: I, cause: E) -> Self {
         Self { msg: msg.into(), source: Some(Arc::new(cause)) }
     }
 }
@@ -28,6 +28,11 @@ impl std::fmt::Display for Error {
 
 impl std::error::Error for Error {
     fn cause(&self) -> Option<&dyn std::error::Error> {
-        self.source.as_ref().map(|a| &**a)
+        self.source.as_ref().map(|a| &**a as &dyn std::error::Error)
     }
+}
+#[test]
+fn error_is_send_sync() {
+    fn assert_send_sync<T: Send + Sync + 'static>() {}
+    assert_send_sync::<Error>();
 }

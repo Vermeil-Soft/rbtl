@@ -140,6 +140,7 @@ impl Listener {
             },
         };
         let identity = SocketIdentity { public_key: packet.src_identity };
+        let remotes_len = self.remotes.len();
         match self.remotes.entry(identity) {
             Entry::Occupied(mut o) => {
                 let socket = o.get_mut();
@@ -147,6 +148,9 @@ impl Listener {
                     // ensure that the address we know from this pub_id is the same we just got the message from
                     socket.add_packet(packet);
                 }
+            },
+            Entry::Vacant(_) if remotes_len >= self.listener_config.max_remotes => {
+                log::debug!("ignoring message from unknown remote {}: already {} remotes", remote_addr, remotes_len);
             },
             Entry::Vacant(vacant) => {
                 // buffer len is used for debug/log purposes

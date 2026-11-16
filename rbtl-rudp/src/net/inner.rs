@@ -2,18 +2,19 @@
 use std::{
     sync::Arc,
     net::{UdpSocket, SocketAddr},
-    io::{Result as IoResult},
+    io::{Error as IoError, Result as IoResult},
     time::{Instant, Duration},
 };
 
-use chacha20poly1305::{ChaCha20Poly1305, Key, KeyInit, aead::Aead};
+use chacha20poly1305::{ChaCha20Poly1305, KeyInit, aead::{Aead, Payload}};
 use x25519_dalek::{PublicKey, EphemeralSecret, SharedSecret};
 
 use rbtl_core::Status;
 
 use crate::{
     SocketEvent,
-    net::protocol::{fragment::{Fragment, ack::Ack}, packet::{Packet, PacketVariant}},
+    consts::CONTROL_MAC_TAG_SIZE,
+    net::protocol::{fragment::{Fragment, ack::{Ack, AckTiming}}, packet::{ControlMac, Packet, PacketVariant}},
     net::common::SeqId,
 };
 
@@ -23,8 +24,20 @@ use super::{
 
 pub (crate) enum SocketSecret {
     Ours(EphemeralSecret),
-    Shared(SharedSecret),
+    Shared {
+        secret: SharedSecret,
+        /// Used to authenticate control packets, with a key derived from `secret`
+        control_cipher: ChaCha20Poly1305,
+    },
+    /// Only while `apply` replaces `Ours` by `Shared`
+    Empty,
 }
+
+/// Nonce used to derive the control packets key from the shared secret.
+///
+/// Encrypted messages use the shared secret directly with the nonce [seq_id (LE)][first 8 bytes of sender's pub key],
+/// this is the same as seq_id=0x6c746272 for a sender whose public key starts with "-ctrlkey", which will never happen.
+const CONTROL_KEY_DERIVATION_NONCE: [u8; 12] = *b"rbtl-ctrlkey";
 
 impl SocketSecret {
     pub (self) fn new(our_secret: EphemeralSecret) -> Self {
@@ -32,25 +45,99 @@ impl SocketSecret {
     }
 
     pub (self) fn new_shared(our_secret: EphemeralSecret, other_pub: &PublicKey) -> Self {
-        Self::Shared(our_secret.diffie_hellman(other_pub))
+        let secret = our_secret.diffie_hellman(other_pub);
+        // Derives the key used to authenticate control packets (see `control_tag`).
+        //
+        // This stands in for a standard key derivation (HKDF, or `blake3::derive_key("rbtl-rudp control", secret)`),
+        // because the only crypto crate we depend on is chacha20poly1305:
+        // encrypting zeros gives the ChaCha20 keystream for (secret, nonce): random-looking bytes that can't be linked
+        // back to the secret, which makes a good separate key. The tag after it is ignored.
+        let cipher = ChaCha20Poly1305::new_from_slice(secret.as_bytes()).unwrap();
+        let keystream = cipher.encrypt(&CONTROL_KEY_DERIVATION_NONCE.into(), [0u8; 32].as_ref())
+            .expect("chacha20 encryption of 32 bytes can't fail");
+        let control_cipher = ChaCha20Poly1305::new_from_slice(&keystream[0..32]).unwrap();
+        Self::Shared { secret, control_cipher }
     }
 
     /// Return the shared secret if available
     pub (crate) fn shared(&self) -> Option<&SharedSecret> {
-        if let Self::Shared(shared) = self {
-            Some(shared)
+        if let Self::Shared { secret, .. } = self {
+            Some(secret)
+        } else {
+            None
+        }
+    }
+
+    /// Return the cipher to authenticate control packets, if the shared secret is available
+    pub (crate) fn control_cipher(&self) -> Option<&ChaCha20Poly1305> {
+        if let Self::Shared { control_cipher, .. } = self {
+            Some(control_cipher)
         } else {
             None
         }
     }
 
     pub (crate) fn apply(&mut self, other_pub: &PublicKey) {
-        match self {
-            Self::Ours(secret) => {
-                *self = Self::Shared(std::mem::replace(secret, unsafe { std::mem::zeroed() }).diffie_hellman(other_pub))
-            }
-            Self::Shared(_) => {
-                // nothing to do, we already have a shared secret
+        *self = match std::mem::replace(self, Self::Empty) {
+            Self::Ours(secret) => Self::new_shared(secret, other_pub),
+            // nothing to do, we already have a shared secret
+            already_shared => already_shared,
+        };
+    }
+}
+
+/// Computes the (truncated) tag of a control packet
+///
+/// This stands in for a keyed hash such as `blake3::keyed_hash(control_key, mac_input)` or HMAC-SHA256,
+/// because the only crypto crate we depend on is chacha20poly1305. It is ChaCha20Poly1305 authenticating
+/// `mac_input` without encrypting anything, which is a sound MAC with one extra rule a keyed hash doesn't have:
+/// the nonce (so the counter) must never be used twice with the same key, or tags can be forged.
+/// That's why `send_packet` refuses to send rather than wrap the counter, and keys change on every connection.
+fn control_tag(cipher: &ChaCha20Poly1305, counter: u32, sender_pub_key: &[u8; 32], mac_input: &[u8]) -> [u8; CONTROL_MAC_TAG_SIZE] {
+    let mut nonce = [0u8; 12];
+    nonce[0..4].copy_from_slice(&counter.to_le_bytes());
+    nonce[4..12].copy_from_slice(&sender_pub_key[0..8]);
+    // nothing to encrypt: the output is only the 16 bytes tag of the "additional data"
+    let tag = cipher.encrypt(&nonce.into(), Payload { msg: &[], aad: mac_input })
+        .expect("chacha20poly1305 of an empty message can't fail");
+    tag[0..CONTROL_MAC_TAG_SIZE].try_into().unwrap()
+}
+
+/// Remembers which control packet counters were received, to refuse replayed packets.
+///
+/// Packets may arrive out of order, so counters slightly lower than the highest one are still accepted once.
+#[derive(Debug, Default)]
+pub (crate) struct ReplayWindow {
+    highest: Option<u32>,
+    /// bit n is set if `highest - n` was received
+    received: u64,
+}
+
+impl ReplayWindow {
+    /// Returns whether `counter` has never been received, and is recent enough to be checked
+    pub (crate) fn is_new(&self, counter: u32) -> bool {
+        let Some(highest) = self.highest else { return true };
+        if counter > highest {
+            return true;
+        }
+        let age = highest - counter;
+        age < u64::BITS && self.received & (1 << age) == 0
+    }
+
+    pub (crate) fn mark_received(&mut self, counter: u32) {
+        match self.highest {
+            Some(highest) if counter <= highest => {
+                self.received |= 1 << (highest - counter);
+            },
+            Some(highest) => {
+                let shift = counter - highest;
+                self.received = if shift >= u64::BITS { 0 } else { self.received << shift };
+                self.received |= 1;
+                self.highest = Some(counter);
+            },
+            None => {
+                self.received = 1;
+                self.highest = Some(counter);
             }
         }
     }
@@ -89,11 +176,11 @@ impl SocketStatus {
     pub (crate) fn event(self) -> Option<SocketEvent> {
         match self {
             SocketStatus::TimeoutError { .. } => Some(SocketEvent::Timeout),
-            SocketStatus::TerminateSent(_) => Some(SocketEvent::Ended),
+            SocketStatus::TerminateSent(_) => Some(SocketEvent::Ended { by_remote: false }),
             // // this is actually commented to tell you that you should NOT uncomment this,
             // // when we receive a packet, we automatically send the right event (ended or aborted)
             // // so there is no need to have a similar event sent here as well
-            // SocketStatus::TerminateReceived => Some(SocketEvent::Ended),
+            // SocketStatus::TerminateReceived => Some(SocketEvent::Ended { by_remote: true }),
             SocketStatus::TerminateReceived(_) => None,
             SocketStatus::Connected => Some(SocketEvent::Connected),
             _ => None
@@ -144,6 +231,11 @@ pub (crate) struct SocketInner {
     pub (crate) self_pub_key: PublicKey,
     pub (crate) secret: SocketSecret,
     pub (crate) other_pub_key: PublicKey,
+
+    /// Counter of the next authenticated control packet we send. u64 so that running out of u32 can be detected.
+    pub (crate) next_control_counter: u64,
+    /// Counters of the authenticated control packets received
+    pub (crate) control_received: ReplayWindow,
 }
 
 
@@ -162,7 +254,10 @@ impl SocketInner {
             last_sent_message: now,
             secret: SocketSecret::new(priv_key),
             self_pub_key: pub_key,
-            other_pub_key: unsafe { std::mem::zeroed() },
+            // unknown until we receive the SynAck: all 0s is what the protocol expects for an unknown destination
+            other_pub_key: PublicKey::from([0u8; 32]),
+            next_control_counter: 0,
+            control_received: ReplayWindow::default(),
         }
     }
 
@@ -185,6 +280,8 @@ impl SocketInner {
             secret: SocketSecret::new_shared(priv_key, &other_pub_key),
             self_pub_key: pub_key,
             other_pub_key,
+            next_control_counter: 0,
+            control_received: ReplayWindow::default(),
         }
     }
 
@@ -204,11 +301,38 @@ impl SocketInner {
         &self.other_pub_key.as_bytes()[0..4] == id
     }
 
-    pub (crate) fn send_ack<D: AsRef<[u8]> + 'static>(&mut self, seq_id: SeqId, ack: Ack<D>, now: Instant) -> std::io::Result<()> {
+    /// Checks the mac of a received control packet. Other packets are always accepted.
+    ///
+    /// Once we have the shared secret, control packets without a valid mac are refused, as are
+    /// replayed ones. Before that, there is nothing to check them with, so they are accepted.
+    pub (crate) fn verify_control_mac<P: AsRef<[u8]>>(&mut self, packet: &Packet<P>) -> bool {
+        if !packet.packet_variant.is_control() {
+            return true;
+        }
+        let Some(cipher) = self.secret.control_cipher() else {
+            return true;
+        };
+        let Some(mac) = packet.mac else {
+            return false;
+        };
+        if !self.control_received.is_new(mac.counter) {
+            return false;
+        }
+        let expected = control_tag(cipher, mac.counter, self.other_pub_key.as_bytes(), &packet.mac_input());
+        // constant time comparison
+        let diff = expected.iter().zip(mac.tag.iter()).fold(0u8, |acc, (a, b)| acc | (a ^ b));
+        if diff != 0 {
+            return false;
+        }
+        self.control_received.mark_received(mac.counter);
+        true
+    }
+
+    pub (crate) fn send_ack<D: AsRef<[u8]> + 'static>(&mut self, seq_id: SeqId, timing: AckTiming, ack: Ack<D>, now: Instant) -> std::io::Result<()> {
         let packet: Packet<D> = Packet::build(
             self.self_pub_key.as_bytes(),
             self.other_pub_key.as_bytes(),
-            PacketVariant::Ack { seq_id, slice: ack.into_inner() }
+            PacketVariant::Ack { seq_id, timing, slice: ack.into_inner() }
         );
         self.send_packet(packet, now)
     }
@@ -275,7 +399,20 @@ impl SocketInner {
         self.send_fragment(fragment.as_borrowed_frag(), now)
     }
 
-    pub (crate) fn send_packet<P: AsRef<[u8]>>(&mut self, packet: Packet<P>, now: Instant) -> IoResult<()> {
+    /// Sends the packet, authenticating it first if it is a control packet and we have the shared secret
+    pub (crate) fn send_packet<P: AsRef<[u8]>>(&mut self, mut packet: Packet<P>, now: Instant) -> IoResult<()> {
+        if packet.packet_variant.is_control() {
+            if let Some(cipher) = self.secret.control_cipher() {
+                // a counter must never be used twice: ~4 billion control packets is years of connection,
+                // but stop rather than reusing a nonce.
+                let Ok(counter) = u32::try_from(self.next_control_counter) else {
+                    return Err(IoError::other("too many control packets sent on this connection"));
+                };
+                self.next_control_counter += 1;
+                let tag = control_tag(cipher, counter, self.self_pub_key.as_bytes(), &packet.mac_input());
+                packet.mac = Some(ControlMac { counter, tag });
+            }
+        }
         self.last_sent_message = now;
         let udp_bytes = UdpBytes::from(&packet);
         self.send_udp_bytes(&udp_bytes)
@@ -289,4 +426,67 @@ impl SocketInner {
             Ok(())
         }
     }
+}
+
+#[test]
+fn replay_window() {
+    let mut w = ReplayWindow::default();
+    assert!(w.is_new(5));
+    w.mark_received(5);
+    assert!(!w.is_new(5));
+    // out of order, but recent: accepted once
+    assert!(w.is_new(3));
+    w.mark_received(3);
+    assert!(!w.is_new(3));
+    w.mark_received(100);
+    assert!(w.is_new(99));
+    assert!(!w.is_new(100));
+    // too old to be tracked: refused
+    assert!(!w.is_new(30));
+    w.mark_received(u32::MAX);
+    assert!(!w.is_new(100));
+}
+
+#[test]
+fn control_mac_roundtrip() {
+    let udp = Arc::new(UdpSocket::bind("127.0.0.1:0").unwrap());
+    let addr = udp.local_addr().unwrap();
+    let client_secret = EphemeralSecret::random();
+    let client_pub = PublicKey::from(&client_secret);
+    let server_secret = EphemeralSecret::random();
+    let server_pub = PublicKey::from(&server_secret);
+    let mut client = SocketInner::new_connecting(udp.clone(), addr, Some((client_pub, client_secret)));
+    client.other_pub_key = server_pub;
+    client.secret.apply(&server_pub);
+    let mut server = SocketInner::new_connected_with_keys(udp, addr, client_pub.to_bytes(), Some((server_pub, server_secret)));
+
+    let build_heartbeat = |from: &SocketInner| -> Packet<Box<[u8]>> {
+        Packet::build(from.self_pub_key.as_bytes(), from.other_pub_key.as_bytes(), PacketVariant::Heartbeat)
+    };
+    // what `send_packet` does, without sending
+    let sign = |from: &mut SocketInner, mut packet: Packet<Box<[u8]>>| {
+        let counter = from.next_control_counter as u32;
+        from.next_control_counter += 1;
+        let tag = control_tag(from.secret.control_cipher().unwrap(), counter, from.self_pub_key.as_bytes(), &packet.mac_input());
+        packet.mac = Some(ControlMac { counter, tag });
+        packet
+    };
+
+    let heartbeat = build_heartbeat(&client);
+    let packet = sign(&mut client, heartbeat);
+    assert!(server.verify_control_mac(&packet));
+    // replayed
+    assert!(!server.verify_control_mac(&packet));
+    // forged tag
+    let heartbeat = build_heartbeat(&client);
+    let mut forged = sign(&mut client, heartbeat);
+    forged.mac.as_mut().unwrap().tag[0] ^= 1;
+    assert!(!server.verify_control_mac(&forged));
+    // no mac at all
+    assert!(!server.verify_control_mac(&build_heartbeat(&client)));
+    // a packet authenticated by the server can't be reflected back to it as if the client sent it
+    let heartbeat = build_heartbeat(&server);
+    let reflected = sign(&mut server, heartbeat);
+    assert!(!server.verify_control_mac(&reflected));
+    assert!(client.verify_control_mac(&reflected));
 }

@@ -1,14 +1,14 @@
 use std::time::{Instant, Duration};
 use std::collections::VecDeque;
 
-use crate::SeqId;
-
-
+/// Helper for implementors: measures the ping from a message we sent and its answer.
+///
+/// Only one message is timed at a time.
 #[derive(Debug)]
-pub (crate) struct PingTracker {
-    pub (crate) waiting_ping: Option<(u32, Instant)>,
+pub struct PingTracker {
+    waiting_ping: Option<(u32, Instant)>,
     // in ms
-    pub (crate) recorded_pings: VecDeque<(u32, Instant)>,
+    recorded_pings: VecDeque<(u32, Instant)>,
 }
 
 impl PingTracker {
@@ -24,18 +24,18 @@ impl PingTracker {
     /// Should be called when we send the packet that will act as a ping
     ///
     /// Does nothing if there is already another last_ping_sent recorded unanswered
-    pub (crate) fn ping(&mut self, seq_id: SeqId) {
+    pub fn ping(&mut self, msg_id: u32) {
         let now = Instant::now();
         let delta_sec = self.waiting_ping.map(|(_, time)| {
             (now - time).as_secs()
         });
         if let Some(delta_sec) = delta_sec {
             if delta_sec <= 3 {
-                // current ping is valid, we will skip storing given seq_id
+                // current ping is valid, we will skip storing given msg_id
                 return;
             }
         }
-        self.waiting_ping = Some((seq_id, now));
+        self.waiting_ping = Some((msg_id, now));
     }
 
     fn register_ping(&mut self, ping_ms: u32, now: Instant) {
@@ -47,31 +47,37 @@ impl PingTracker {
 
     /// Should be called when we receive the ping back
     ///
-    /// Does nothing if the seq_id has not been recorded
-    pub (crate) fn pong(&mut self, seq_id: SeqId) {
-        let clear_waiting_ping: bool = match self.waiting_ping {
-            Some((stored_seq_id, time)) if stored_seq_id == seq_id => {
+    /// Does nothing if the msg_id has not been recorded
+    pub fn pong(&mut self, msg_id: u32) {
+        self.pong_with_delay(msg_id, Duration::ZERO)
+    }
+
+    /// Same as `pong`, but `remote_delay` is how long the remote waited before answering:
+    /// it is not part of the network time, so it is removed from the ping.
+    pub fn pong_with_delay(&mut self, msg_id: u32, remote_delay: Duration) {
+        match self.waiting_ping {
+            Some((stored_msg_id, time)) if stored_msg_id == msg_id => {
                 let now = Instant::now();
-                let d = now - time;
-                let ms = d.subsec_millis();
-                let secs = d.as_secs();
-                let ping_ms = if secs >= 5 {
-                    4999u32
-                } else {
-                    ms + (secs as u32) * 1000
-                };
+                let round_trip = now.saturating_duration_since(time).saturating_sub(remote_delay);
+                let ping_ms = round_trip.as_millis().min(4999) as u32;
                 self.register_ping(ping_ms, now);
-                true
+                self.waiting_ping = None;
             },
-            _ => false
-        };
-        if clear_waiting_ping {
+            _ => {}
+        }
+    }
+
+    /// Forget the ping of `msg_id` without recording anything, because its answer can't be timed correctly.
+    ///
+    /// Allows timing the next message right away.
+    pub fn cancel(&mut self, msg_id: u32) {
+        if matches!(self.waiting_ping, Some((stored_msg_id, _)) if stored_msg_id == msg_id) {
             self.waiting_ping = None;
         }
     }
 
     /// Returns the average ping over the given past duration
-    pub (crate) fn avg_ping(&self, seconds: f32) -> Option<f32> {
+    pub fn avg_ping(&self, seconds: f32) -> Option<f32> {
         // also catches NaN, which `Duration::from_secs_f32` would panic on, as would negatives
         if !(seconds > 0.0) {
             return self.recorded_pings.get(0).map(|(p, _)| *p as f32);
@@ -99,10 +105,17 @@ impl PingTracker {
     }
 
     /// Returns the lastest ping in ms, and when it arrived.
-    pub (crate) fn last_ping_info(&self) -> Option<(u32, Instant)> {
+    pub fn last_ping_info(&self) -> Option<(u32, Instant)> {
         self.recorded_pings.get(0).copied()
     }
 }
+
+impl Default for PingTracker {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[test]
 fn avg_ping_any_seconds() {
     let mut p = PingTracker::new();
@@ -111,4 +124,33 @@ fn avg_ping_any_seconds() {
     for seconds in [-1.0, 0.0, f32::NAN, f32::INFINITY, 1e30, 1.0] {
         assert_eq!(p.avg_ping(seconds), Some(42.0), "seconds={}", seconds);
     }
+}
+
+#[test]
+fn pong_removes_remote_delay() {
+    let mut p = PingTracker::new();
+    p.ping(1);
+    std::thread::sleep(Duration::from_millis(30));
+    // the remote says it waited longer than the whole round trip: never underflows
+    p.pong_with_delay(1, Duration::from_secs(10));
+    assert_eq!(p.last_ping_info().map(|(ms, _)| ms), Some(0));
+
+    p.ping(2);
+    std::thread::sleep(Duration::from_millis(30));
+    p.pong_with_delay(2, Duration::from_millis(20));
+    let ms = p.last_ping_info().unwrap().0;
+    assert!(ms >= 10 && ms < 30, "ping was {}ms", ms);
+}
+
+#[test]
+fn cancel_skips_sample() {
+    let mut p = PingTracker::new();
+    p.ping(1);
+    p.cancel(1);
+    p.pong(1);
+    assert_eq!(p.last_ping_info(), None);
+    // the next message can be timed right away
+    p.ping(2);
+    p.pong(2);
+    assert!(p.last_ping_info().is_some());
 }

@@ -88,7 +88,10 @@ impl<D: AsRef<[u8]> + 'static + Clone> SentDataSet<D> {
 
     /// Returns whether or not all acks have been received by the other party
     pub (self) fn resend_packets(&mut self, seq_id: SeqId, now: Instant, socket: &mut SocketInner) -> Option<Instant> {
-        let (fragments, frag_total) = build_fragments_from_bytes(self.data.as_ref(), seq_id, self.flags)
+        // tells the remote to not use its ack for the ping: it can't know which of our sends it answers
+        let mut resend_flags = self.flags;
+        resend_flags.set_resend(true);
+        let (fragments, frag_total) = build_fragments_from_bytes(self.data.as_ref(), seq_id, resend_flags)
             .expect("Unreachable: message has been sent once but couldn't be resent because too big");
         
         let mut last_complete_ack: Option<Instant> = None;

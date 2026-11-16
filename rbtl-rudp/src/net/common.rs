@@ -83,14 +83,20 @@ impl Default for SocketConfig {
 pub struct ListenerConfig {
     /// if we receive an unknown message from a unknown remote, should we transfer it or ignore?
     pub transfer_unknown_raw: bool,
+    /// Maximum number of remotes (connected or not). Above that, new connections are ignored.
+    ///
+    /// Anyone can create a remote by sending a Syn, possibly from fake addresses, so this protects the memory.
+    pub max_remotes: usize,
 }
 
 impl ListenerConfig {
     pub const DEFAULT_TRANSFER_UNKNOWN_RAW: bool = false;
+    pub const DEFAULT_MAX_REMOTES: usize = 1024;
 
     pub fn new() -> Self {
         Self {
             transfer_unknown_raw: Self::DEFAULT_TRANSFER_UNKNOWN_RAW,
+            max_remotes: Self::DEFAULT_MAX_REMOTES,
         }
     }
 }

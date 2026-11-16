@@ -12,6 +12,25 @@ impl FragmentSetFlags {
     pub (self) const IS_KEY_MASK: u16 = 0b001;
     pub (self) const IS_EXPIRE_MASK: u16 = 0b010;
     pub (self) const IS_ENCRYPTED_CHACHA20_MASK: u16 = 0b100;
+    /// Set on fragments sent again because they were not acked in time.
+    ///
+    /// Unlike the other flags, it describes this one transmission, not the whole set: fragments
+    /// of the same set may have it or not.
+    pub (self) const IS_RESEND_MASK: u16 = 0b1000;
+
+    pub fn set_resend(&mut self, b: bool) {
+        self.0 = self.0 & !Self::IS_RESEND_MASK;
+        if b { self.0 |= Self::IS_RESEND_MASK };
+    }
+
+    pub fn is_resend(&self) -> bool {
+        self.0 & Self::IS_RESEND_MASK > 0
+    }
+
+    /// The flags shared by every fragment of the set (meaning, without the per-transmission ones)
+    pub fn set_flags(self) -> Self {
+        Self(self.0 & !Self::IS_RESEND_MASK)
+    }
 
     pub fn set_encrypted_cha_cha_20(&mut self, b: bool) {
         self.0 = self.0 & !Self::IS_ENCRYPTED_CHACHA20_MASK;

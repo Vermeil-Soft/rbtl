@@ -14,8 +14,8 @@ impl<T> SyncUnsafeCell<T> {
     }
 }
 
-unsafe impl<T> Sync for SyncUnsafeCell<T> {}
-unsafe impl<T> Send for SyncUnsafeCell<T> {}
+// same bounds as std's SyncUnsafeCell: Send is derived automatically (only if T: Send)
+unsafe impl<T: Sync> Sync for SyncUnsafeCell<T> {}
 
 impl<T> std::fmt::Debug for SyncUnsafeCell<T> where T: std::fmt::Debug {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

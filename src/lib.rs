@@ -4,6 +4,8 @@ pub use rbtl_tcp;
 pub use rbtl_core;
 
 pub use paste;
+#[doc(hidden)]
+pub use log;
 
 pub mod prelude;
 mod socket;

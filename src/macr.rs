@@ -116,7 +116,7 @@ macro_rules! _rbtl_structs_impl {
                     $(
                     if !self.[<$name:snake _done>] {
                         if let (Some(stem), Some(conn_info)) = (&stem.[<$name:snake>], &self.connect_info.[<$name:snake>]) {
-                            log::info!(
+                            $crate::log::info!(
                                 target: "rbtl_macr",
                                 "trying to connect through protocol {}: {:?}",
                                 <$struct as $crate::Server>::RBTL_PROTOCOL_NAME,
@@ -130,7 +130,7 @@ macro_rules! _rbtl_structs_impl {
                             match client {
                                 Ok(client) => return Some(RBTLClient::$name(client)),
                                 Err(e) => {
-                                    log::error!(
+                                    $crate::log::error!(
                                         target: "rbtl_macr",
                                         "protocol {} had initialization error: {}",
                                         <$struct as $crate::Server>::RBTL_PROTOCOL_NAME,
@@ -139,7 +139,7 @@ macro_rules! _rbtl_structs_impl {
                                 }
                             }
                         } else {
-                            log::info!(
+                            $crate::log::info!(
                                 target: "rbtl_macr",
                                 "protocol {} not provided in received connect_info",
                                 <$struct as $crate::Server>::RBTL_PROTOCOL_NAME
@@ -204,7 +204,7 @@ macro_rules! _rbtl_structs_impl {
                         }
                     };
                     if let Some(kind) = self.inner.curr_kind() {
-                        log::warn!(target: "rbtl_macr", "failed to connect through protocol {}, trying next one. (err = {})",
+                        $crate::log::warn!(target: "rbtl_macr", "failed to connect through protocol {}, trying next one. (err = {})",
                             kind.rbtl_protocol_name(),
                             err_msg
                         );
@@ -280,7 +280,7 @@ macro_rules! _rbtl_structs_impl {
             /// Sync version. You need to call "process" regularly otherwise the server will not know your messages
             /// have arrived, and you won't be able to send new ones.
             impl RBTLClient {
-                pub fn new<'a>(b: RBTLClientBuilder, stem: &'a RBTLClientStem<'a>) -> Result<Self, Box<dyn std::error::Error>> {
+                pub fn new<'a>(b: RBTLClientBuilder, stem: &'a RBTLClientStem<'a>) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
                     match b {
                         $( RBTLClientBuilder::$name(init, options) => {
                             if let Some(stem) = &stem.[<$name:snake>] {
@@ -388,7 +388,7 @@ macro_rules! _rbtl_structs_impl {
                     }
                 }
 
-                pub fn send<B>(&mut self, bytes: B, send_options: RBTLSendOptions) -> Result<RBTLMessageId, Box<dyn std::error::Error>>
+                pub fn send<B>(&mut self, bytes: B, send_options: RBTLSendOptions) -> Result<RBTLMessageId, Box<dyn std::error::Error + Send + Sync>>
                     where B: Into<std::sync::Arc<[u8]>> + AsRef<[u8]> + Clone {
                     match self {
                         $( Self::$name(client) => {
@@ -404,7 +404,7 @@ macro_rules! _rbtl_structs_impl {
             }
 
             impl<'a> RBTLServClientMut<'a> {
-                pub fn send<B>(&mut self, bytes: B, send_options: RBTLSendOptions) -> Result<RBTLMessageId, Box<dyn std::error::Error>>
+                pub fn send<B>(&mut self, bytes: B, send_options: RBTLSendOptions) -> Result<RBTLMessageId, Box<dyn std::error::Error + Send + Sync>>
                     where B: Into<std::sync::Arc<[u8]>> + AsRef<[u8]> + Clone {
                     match self {
                         $( Self::$name(client) => {
@@ -510,19 +510,19 @@ macro_rules! _rbtl_structs_impl {
 
             impl RBTLListener {
                 /// Create a listener with custom options for each listener type
-                pub fn new<'a>(stem: &'a RBTLServStem<'a>, params: RBTLServCreateParams) -> Result<Self, Box<dyn std::error::Error>> {
+                pub fn new<'a>(stem: &'a RBTLServStem<'a>, params: RBTLServCreateParams) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
                     Self::new_with(stem, params, Default::default())
                 }
 
                 /// Create a listener with custom options and server config for each listener type
-                pub fn new_with<'a>(stem: &'a RBTLServStem<'a>, params: RBTLServCreateParams, config: RBTLServConfig) -> Result<Self, Box<dyn std::error::Error>> {
+                pub fn new_with<'a>(stem: &'a RBTLServStem<'a>, params: RBTLServCreateParams, config: RBTLServConfig) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
                     Ok(Self {
                         $( [<$name:snake>] : params.[<$name:snake>].and_then(|params| {
                                 stem.[<$name:snake>].as_ref().and_then(|stem| {
                                     match <$struct as $crate::rbtl_core::Server>::new_with(stem, params, config.[<$name:snake>]) {
                                         Ok(s) => Some(s),
                                         Err(e) => {
-                                            log::error!(target: "rbtl_macr",
+                                            $crate::log::error!(target: "rbtl_macr",
                                                 "error initalizing rbtl server's {} protocol: {}",
                                                 <$struct as $crate::rbtl_core::Server>::RBTL_PROTOCOL_NAME,
                                                 e
@@ -753,15 +753,22 @@ macro_rules! _rbtl_structs_impl {
         }
 
         impl Drop for RBTLAsyncClient {
+            /// Does not block: the thread is told to stop, and finishes the graceful end on its own.
+            ///
+            /// If the program exits right after, the end may not reach the remote. Use `stop_and_wait` to make sure.
             fn drop(&mut self) {
                 self.send_stop();
-                self.wait();
+                // dropping a JoinHandle detaches the thread: it keeps running until its loop ends
+                drop(self.handle.take());
             }
         }
 
         impl RBTLAsyncClient {
 
-            fn spawn_thread_loop(inner: &RBTLAsyncClientInner) -> std::thread::JoinHandle<()> {
+            /// How long the client keeps running after `send_stop` (or drop) by default, see `new_with_graceful_end`
+            pub const DEFAULT_GRACEFUL_END: std::time::Duration = std::time::Duration::from_millis(250);
+
+            fn spawn_thread_loop(inner: &RBTLAsyncClientInner, graceful_end: std::time::Duration) -> std::thread::JoinHandle<()> {
                 const WAIT_DUR: std::time::Duration = std::time::Duration::from_millis(1);
 
                 let should_stop = std::sync::Arc::clone(&inner.should_stop);
@@ -769,25 +776,34 @@ macro_rules! _rbtl_structs_impl {
                 let events = std::sync::Arc::clone(&inner.events);
 
                 std::thread::spawn(move || {
-                    let mut post_end_iters: usize = 10;
-                    let mut has_sent_end = false;
+                    // set when we are asked to stop: until then, we keep processing so that the remote
+                    // receives our end, and our last messages can still be resent if they were lost
+                    let mut end_deadline: Option<std::time::Instant> = None;
 
-                    while post_end_iters > 0 {
+                    loop {
                         std::thread::sleep(WAIT_DUR);
+                        let mut guard = client.lock().expect("poison");
                         if should_stop.load(std::sync::atomic::Ordering::Relaxed) {
                             // "should stop" branch
-                            let mut guard = client.lock().expect("poison");
-                            if !has_sent_end {
-                                has_sent_end = true;
-                                guard.end()
+                            let now = std::time::Instant::now();
+                            let deadline = match end_deadline {
+                                Some(deadline) => deadline,
+                                // already disconnected: nothing left to send
+                                None if guard.status().is_conn_over() => now,
+                                None => {
+                                    guard.end();
+                                    now + graceful_end
+                                },
+                            };
+                            end_deadline = Some(deadline);
+                            if now >= deadline {
+                                break;
                             }
                             guard.process();
-                            post_end_iters -= 1;
                             continue;
                         }
 
                         // "running" branch
-                        let mut guard = client.lock().expect("poison");
                         guard.process();
                         let mut events_guard = events.lock().expect("events poison");
                         events_guard.extend(guard.drain_events());
@@ -799,12 +815,20 @@ macro_rules! _rbtl_structs_impl {
             }
 
             pub fn new(client: RBTLClient) -> Self {
+                Self::new_with_graceful_end(client, Self::DEFAULT_GRACEFUL_END)
+            }
+
+            /// Same as `new`, but when stopped (or dropped), the client keeps running for `graceful_end` after
+            /// ending the connection, so the remote has time to receive the end and our last messages.
+            ///
+            /// `stop_and_wait` blocks for up to that long, dropping the client does not block.
+            pub fn new_with_graceful_end(client: RBTLClient, graceful_end: std::time::Duration) -> Self {
                 use std::sync::Arc;
                 let client = Arc::new(std::sync::Mutex::new(client));
                 let should_stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
 
                 let inner = RBTLAsyncClientInner { client, should_stop, events: Default::default() };
-                let handle = Self::spawn_thread_loop(&inner);
+                let handle = Self::spawn_thread_loop(&inner, graceful_end);
                 Self { inner, handle: Some(handle), pending_events: Default::default() }
             }
 
@@ -871,7 +895,7 @@ macro_rules! _rbtl_structs_impl {
                 self.with_lock(|c| c.is_msg_received(msg_id))
             }
 
-            pub fn send<B>(&mut self, bytes: B, send_options: RBTLSendOptions) -> Result<RBTLMessageId, Box<dyn std::error::Error>>
+            pub fn send<B>(&mut self, bytes: B, send_options: RBTLSendOptions) -> Result<RBTLMessageId, Box<dyn std::error::Error + Send + Sync>>
                 where B: Into<std::sync::Arc<[u8]>> + AsRef<[u8]> + Clone + 'static {
                 self.with_lock(|c| c.send(bytes, send_options))
             }
@@ -886,11 +910,13 @@ macro_rules! _rbtl_structs_impl {
                     return;
                 };
                 if let Err(_e) = handle.join() {
-                    log::error!(target: "rbtl_macr", "fatal error while waiting for rbtl async_client stop");
+                    $crate::log::error!(target: "rbtl_macr", "fatal error while waiting for rbtl async_client stop");
                 }
             }
 
-            /// Stops the AsyncClient, and waits until everything is cleaned up
+            /// Stops the AsyncClient, and waits until everything is cleaned up (up to the graceful end duration).
+            ///
+            /// Unlike drop, this blocks: use it when the program is about to exit, so that the end reaches the remote.
             pub fn stop_and_wait(mut self) {
                 self.send_stop();
                 self.wait();
@@ -909,14 +935,15 @@ macro_rules! rbtl_structs {
         }
 
         $crate::paste::paste! {
+            // in an anonymous const so these imports do not leak into the module calling the macro
+            const _: () = {
             use $crate::serde::{Serialize, Deserialize, Serializer, Deserializer};
             use $crate::serde::de::{MapAccess, Visitor};
+            use $crate::serde::ser::SerializeMap;
             use std::fmt;
-            use super::*;
 
             impl Serialize for RBTLConnectInfo {
                 fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error> where S: Serializer {
-                    use serde::ser::SerializeMap;
 
                     let mut n = 0;
                     $( if self.[<$name:snake>].is_ok() { n += 1 }; )*
@@ -980,6 +1007,7 @@ macro_rules! rbtl_structs {
                     deserializer.deserialize_map(ConnectInfoParsedVisitor)
                 }
             }
+            };
         }
     }
 }

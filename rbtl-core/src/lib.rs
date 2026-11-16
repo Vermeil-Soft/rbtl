@@ -2,6 +2,8 @@
 
 use std::{error::Error, fmt::Debug, hash::Hash, sync::Arc};
 
+pub mod utils;
+
 #[derive(Debug)]
 pub enum Event {
     Data(Box<[u8]>),
@@ -48,8 +50,8 @@ pub trait Client: Debug {
     type Stem<'a>;
     type ConnectOptions: Debug + Default;
     type SendOptions: Debug + Default + Clone;
-    type SendError: Error;
-    type StateError: Error;
+    type SendError: Error + Send + Sync + 'static;
+    type StateError: Error + Send + Sync + 'static;
 
     /// Create a new client for this connection type.
     fn new<'a>(stem: &'a Self::Stem<'a>, params: Self::CreateParams, options: Self::ConnectOptions) -> Result<Self, Self::StateError> where Self: Sized;
@@ -122,8 +124,8 @@ pub trait Server: Debug {
     type ServClient: ServClient;
     type ConnectingClient: Client;
     type SendOptions: Default;
-    type SendError: Error;
-    type StateError: ServerStateError;
+    type SendError: Error + Send + Sync + 'static;
+    type StateError: ServerStateError + Send + Sync + 'static;
     // struct to indicate how to connect to this listener
     type ConnectInfo: Clone + for <'a> TryFrom<&'a [u8]> + TryInto<Vec<u8>> + Debug;
     type MessageId: Debug + Clone + PartialOrd + PartialEq + Eq + Hash + PartialOrd + Ord;

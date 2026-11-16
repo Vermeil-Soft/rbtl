@@ -17,7 +17,6 @@
 //! 
 //! You do not have to remember this as a library user, it is just a quick overview of how it works under the hood.
 
-mod ping_tracker;
 mod ingester;
 mod socket;
 mod listener;

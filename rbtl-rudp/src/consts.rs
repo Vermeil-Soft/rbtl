@@ -32,3 +32,25 @@ pub const MAX_MESSAGE_SIZE: usize = MAX_FRAGMENT_INNER_SIZE * MAX_FRAGMENTS_IN_M
 
 /// Number of iterations we must wait to send the next ack since the last one.
 pub (crate) const ACK_SEND_INTERVAL: Duration = Duration::from_millis(50);
+
+/// Maximum number of messages being re-assembled at the same time, per remote.
+///
+/// Each one can hold up to `MAX_MESSAGE_SIZE` bytes, so this bounds the memory a remote can make us use.
+pub (crate) const MAX_INCOMPLETE_FRAGMENT_SETS: usize = 32;
+
+/// Maximum number of messages (complete or not) remembered per remote.
+///
+/// Complete messages are remembered for a while so that resent fragments are not delivered twice.
+/// They are small, but a remote sending lots of messages could still fill the memory without a limit.
+pub (crate) const MAX_FRAGMENT_SETS: usize = 16384;
+
+/// Delay before re-sending the first Syn if there is no answer. It doubles after each try, up to `SYN_RESEND_MAX_DELAY`.
+pub (crate) const SYN_RESEND_FIRST_DELAY: Duration = Duration::from_millis(250);
+
+pub (crate) const SYN_RESEND_MAX_DELAY: Duration = Duration::from_secs(1);
+
+/// Size of the truncated Poly1305 tag of control packets
+pub (crate) const CONTROL_MAC_TAG_SIZE: usize = 8;
+
+/// Size of the mac at the end of control packets: a u32 counter, then the tag
+pub (crate) const CONTROL_MAC_SIZE: usize = 4 + CONTROL_MAC_TAG_SIZE;

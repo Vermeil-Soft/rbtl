@@ -1,7 +1,7 @@
 use byteorder::{BigEndian, ByteOrder};
 
 use crate::{
-    SeqId, 
+    SeqId,
     socket::{
         MSG_TYPE_DATA_HEAD_LEN, MSG_TYPE_DATA_ID, MSG_TYPE_HEARTBEAT_ID, MSG_TYPE_STATUS_HEAD_LEN, MSG_TYPE_STATUS_ID
     }
@@ -11,6 +11,8 @@ use crate::{
 pub (crate) struct Ingester {
     incomplete: Option<IncomingIncomplete>,
     pub (crate) results: Vec<IngesterResult>,
+    /// Set after the first error: the stream is out of sync, so nothing after it can be parsed reliably
+    failed: bool,
 }
 
 impl Ingester {
@@ -18,13 +20,34 @@ impl Ingester {
         Self {
             incomplete: None,
             results: Vec::new(),
+            failed: false,
         }
     }
 
-    pub (crate) fn take_bytes(&mut self, bytes: &[u8], max_len: u32) {
-        if bytes.len() == 0 {
-            return;
+    pub (crate) fn take_bytes(&mut self, mut bytes: &[u8], max_len: u32) {
+        while !bytes.is_empty() && !self.failed {
+            bytes = self.take_some_bytes(bytes, max_len);
         }
+    }
+
+    fn fail(&mut self, msg: String) {
+        self.results.push(IngesterResult::Error(msg));
+        self.incomplete = None;
+        self.failed = true;
+    }
+
+    /// Starts receiving the body of a data message, or finishes it right away if it is empty
+    fn start_data(&mut self, data: IncompleteData) {
+        if data.expected_len == 0 {
+            self.results.push(IngesterResult::Data(data.seq_id, Vec::new()));
+            self.incomplete = None;
+        } else {
+            self.incomplete = Some(IncomingIncomplete::Data(data));
+        }
+    }
+
+    /// Parses the start of `bytes` (which must not be empty), and returns what is left to parse
+    fn take_some_bytes<'a>(&mut self, bytes: &'a [u8], max_len: u32) -> &'a [u8] {
         // that's not very DRY..., but I don't know how to simplify it better than that.
         match &mut self.incomplete {
             None => {
@@ -34,38 +57,39 @@ impl Ingester {
                     match headless_bytes.split_at_checked(MSG_TYPE_DATA_HEAD_LEN) {
                         None => {
                             self.incomplete = Some(IncomingIncomplete::Bytes(Vec::from(bytes)));
+                            &[]
                         },
                         Some((head, tail)) => {
-                            let d = IncompleteData::new(head, max_len);
-                            match d {
+                            match IncompleteData::new(head, max_len) {
                                 Ok(d) => {
-                                    self.incomplete = Some(IncomingIncomplete::Data(d));
-                                    self.take_bytes(tail, max_len);
+                                    self.start_data(d);
+                                    tail
                                 },
                                 Err(expected_len) => {
-                                    let msg = format!("sent message from remote was too big: {} bytes", expected_len);
-                                    self.results.push(IngesterResult::Error(msg));
+                                    self.fail(format!("sent message from remote was too big: {} bytes", expected_len));
+                                    &[]
                                 }
                             }
                         },
-                    };
+                    }
                 } else if id == MSG_TYPE_STATUS_ID {
                     match headless_bytes.split_at_checked(MSG_TYPE_STATUS_HEAD_LEN) {
                         None => {
                             self.incomplete = Some(IncomingIncomplete::Bytes(Vec::from(bytes)));
+                            &[]
                         },
                         Some((head, tail)) => {
                             let seq_id = BigEndian::read_u32(head);
                             self.results.push(IngesterResult::SeqIdOk(seq_id));
-                            self.take_bytes(tail, max_len);
+                            tail
                         },
-                    };
+                    }
                 } else if id == MSG_TYPE_HEARTBEAT_ID {
                     self.results.push(IngesterResult::Heartbeat);
-                    self.take_bytes(headless_bytes, max_len);
+                    headless_bytes
                 } else {
-                    let msg = format!("wrong rbtl-tcp msg id {}", id);
-                    self.results.push(IngesterResult::Error(msg));
+                    self.fail(format!("wrong rbtl-tcp msg id {}", id));
+                    &[]
                 }
             }
             Some(IncomingIncomplete::Bytes(incomplete_bytes)) => {
@@ -74,42 +98,40 @@ impl Ingester {
                 if id == MSG_TYPE_DATA_ID {
                     match bytes.split_at_checked(MSG_TYPE_DATA_HEAD_LEN - tail_bytes.len()) {
                         None => {
-                            let mut v = std::mem::take(incomplete_bytes);
-                            v.extend_from_slice(bytes);
-                            self.incomplete = Some(IncomingIncomplete::Bytes(Vec::from(v)));
+                            incomplete_bytes.extend_from_slice(bytes);
+                            &[]
                         },
                         Some((head, tail)) => {
                             incomplete_bytes.extend_from_slice(head);
                             match IncompleteData::new(&incomplete_bytes[1..], max_len) {
                                 Ok(d) => {
-                                    self.incomplete = Some(IncomingIncomplete::Data(d));
-                                    self.take_bytes(tail, max_len);
+                                    self.start_data(d);
+                                    tail
                                 },
                                 Err(expected_len) => {
-                                    let msg = format!("sent message from remote was too big: {} bytes", expected_len);
-                                    self.results.push(IngesterResult::Error(msg));
+                                    self.fail(format!("sent message from remote was too big: {} bytes", expected_len));
+                                    &[]
                                 }
                             }
                         },
-                    };
+                    }
                 } else if id == MSG_TYPE_STATUS_ID {
                     match bytes.split_at_checked(MSG_TYPE_STATUS_HEAD_LEN - tail_bytes.len()) {
                         None => {
-                            let mut v = std::mem::take(incomplete_bytes);
-                            v.extend_from_slice(bytes);
-                            self.incomplete = Some(IncomingIncomplete::Bytes(v));
+                            incomplete_bytes.extend_from_slice(bytes);
+                            &[]
                         },
                         Some((head, tail)) => {
                             incomplete_bytes.extend_from_slice(head);
                             let seq_id = BigEndian::read_u32(&incomplete_bytes[1..]);
                             self.results.push(IngesterResult::SeqIdOk(seq_id));
                             self.incomplete = None;
-                            self.take_bytes(tail, max_len);
+                            tail
                         },
-                    };
+                    }
                 } else {
-                    let msg = format!("wrong rbtl-tcp (incomplete) msg id {}", id);
-                    self.results.push(IngesterResult::Error(msg));
+                    self.fail(format!("wrong rbtl-tcp (incomplete) msg id {}", id));
+                    &[]
                 }
             },
             Some(IncomingIncomplete::Data(d)) => {
@@ -119,12 +141,8 @@ impl Ingester {
                     // the message is complete, transform it
                     self.results.push(IngesterResult::Data(d.seq_id, std::mem::take(&mut d.waiting_bytes)));
                     self.incomplete = None;
-                    if taken < bytes.len() {
-                        self.take_bytes(&bytes[taken..], max_len);
-                    }
-                } else {
-                    // the message is still incomplete, but there are no more bytes to take
                 }
+                &bytes[taken..]
             },
         }
     }
@@ -216,4 +234,33 @@ fn ingester_test_cut1() {
 #[test]
 fn ingester_test_cut5() {
     base_ingester_test(5);
+}
+
+#[cfg(test)]
+#[test]
+fn ingester_stops_at_first_error() {
+    let mut ingester = Ingester::new();
+    // an unknown message id, followed by what would be a valid status message
+    ingester.take_bytes(&[42, 1, 0, 0, 0, 7], 1_000_000);
+    ingester.take_bytes(&[1, 0, 0, 0, 8], 1_000_000);
+    assert_eq!(ingester.results.len(), 1);
+    assert!(matches!(ingester.results[0], IngesterResult::Error(_)));
+}
+
+#[cfg(test)]
+#[test]
+fn ingester_many_heartbeats_no_recursion() {
+    // used to recurse once per message: a long burst of small messages could overflow the stack
+    let mut ingester = Ingester::new();
+    let bytes = vec![MSG_TYPE_HEARTBEAT_ID; 1_000_000];
+    ingester.take_bytes(&bytes, 1_000_000);
+    assert_eq!(ingester.results.len(), 1_000_000);
+}
+
+#[cfg(test)]
+#[test]
+fn ingester_empty_data_message() {
+    let mut ingester = Ingester::new();
+    ingester.take_bytes(&[0, 0, 0, 0, 5, 0, 0, 0, 0], 1_000_000);
+    assert_eq!(ingester.results, vec![IngesterResult::Data(5, vec![])]);
 }

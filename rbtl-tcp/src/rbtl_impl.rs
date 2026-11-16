@@ -1,5 +1,5 @@
 use std::{
-    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpStream, ToSocketAddrs}, sync::Arc, vec::IntoIter
+    net::{SocketAddr, TcpStream, ToSocketAddrs}, sync::Arc, vec::IntoIter
 };
 
 use crate::{
@@ -202,16 +202,11 @@ impl Server for Listener {
     }
 
     fn connect_info(&self) -> Option<Result<Self::ConnectInfo, Self::StateError>> {
-        let Ok(mut local_addr) = self.tcp_listener.local_addr() else {
+        let Ok(local_addr) = self.tcp_listener.local_addr() else {
             return Some(Err(Error::new(format!("unable to get local_addr: is the network on?"))));
         };
-        if local_addr.is_ipv4() {
-            local_addr.set_ip(IpAddr::V4(Ipv4Addr::LOCALHOST))
-        } else {
-            local_addr.set_ip(IpAddr::V6(Ipv6Addr::LOCALHOST))
-        }
         Some(Ok(ConnectInfo {
-            addr: local_addr
+            addr: rbtl_core::utils::shareable_local_addr(local_addr)
         }))
     }
 

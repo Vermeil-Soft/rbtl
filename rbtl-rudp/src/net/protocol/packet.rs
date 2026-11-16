@@ -5,21 +5,33 @@ use crate::{
     utils::{BoxedSlice, OwnedSlice},
     consts::*,
     net::protocol::{
-        fragment::{Fragment, FragmentSetFlags, ack::Acks},
+        fragment::{Fragment, FragmentSetFlags, ack::AckTiming},
     }
 };
+
+/// Authentication of a control packet (Ack, End, Abort, Heartbeat), see `UdpBytes` for the layout.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub (crate) struct ControlMac {
+    /// Number of control packets sent before this one by the sender: never the same twice,
+    /// so the tag can be computed with a unique nonce, and replayed packets can be detected.
+    pub (crate) counter: u32,
+    /// Poly1305 tag of the packet, truncated
+    pub (crate) tag: [u8; CONTROL_MAC_TAG_SIZE],
+}
 
 #[derive(Debug)]
 pub (crate) struct Packet<P: AsRef<[u8]>> {
     pub (crate) src_identity: [u8; 4],
     pub (crate) dst_identity: [u8; 4],
     pub (crate) packet_variant: PacketVariant<P>,
+    /// Only for control packets, and only when both sides have the shared secret
+    pub (crate) mac: Option<ControlMac>,
 }
 
 #[derive(Debug, PartialEq)]
 pub (crate) enum PacketVariant<P: AsRef<[u8]>> {
     Fragment(Fragment<P>),
-    Ack { seq_id: SeqId, slice: P },
+    Ack { seq_id: SeqId, timing: AckTiming, slice: P },
     Syn { pub_key: [u8; 32] },
     SynAck { pub_key: [u8; 32] },
     Heartbeat,
@@ -27,12 +39,23 @@ pub (crate) enum PacketVariant<P: AsRef<[u8]>> {
     Abort { last_seq_id: SeqId }
 }
 
+impl<P: AsRef<[u8]>> PacketVariant<P> {
+    /// Control packets can be authenticated with a `ControlMac`
+    pub (crate) fn is_control(&self) -> bool {
+        matches!(self, Self::Ack { .. } | Self::Heartbeat | Self::End { .. } | Self::Abort { .. })
+    }
+}
+
+/// Flag of control packets: the packet ends with a `ControlMac`
+const CONTROL_FLAG_HAS_MAC: u16 = 0b1;
+
 impl<P: AsRef<[u8]>> Packet<P> {
     pub (crate) fn new(src_identity: [u8; 4], dst_identity: [u8; 4], packet_variant: PacketVariant<P>) -> Self {
         Self {
             src_identity,
             dst_identity,
-            packet_variant
+            packet_variant,
+            mac: None,
         }
     }
 
@@ -46,8 +69,8 @@ impl<P: AsRef<[u8]>> Packet<P> {
         let after_common: usize = match &self.packet_variant {
             // seq_id + data.len()
             PacketVariant::Fragment(f) => std::mem::size_of::<u32>() + f.data.as_ref().len(),
-            // seq_id + ack_slice.len()
-            PacketVariant::Ack { slice, .. } => std::mem::size_of::<u32>() + slice.as_ref().len(),
+            // seq_id + timing + ack_slice.len()
+            PacketVariant::Ack { slice, .. } => std::mem::size_of::<u32>() + std::mem::size_of::<u16>() + slice.as_ref().len(),
             // public key of 32 bytes, + payload
             PacketVariant::Syn { .. } => std::mem::size_of::<[u8; 32]>(),
             // public key of 32 bytes
@@ -81,8 +104,10 @@ impl<P: AsRef<[u8]>> Packet<P> {
         output[16..48].copy_from_slice(key);
     }
 
-    pub (crate) fn to_bytes(&self) -> Vec<u8> {
+    /// Writes everything except the CRC32 (left as 0s) and the mac
+    fn to_bytes_without_mac(&self, has_mac: bool) -> Vec<u8> {
         let mut bytes = vec![0; self.udp_packet_size()];
+        let control_flags = if has_mac { CONTROL_FLAG_HAS_MAC } else { 0 };
 
         match &self.packet_variant {
             PacketVariant::Fragment(f) => {
@@ -91,10 +116,11 @@ impl<P: AsRef<[u8]>> Packet<P> {
                 Self::write_flags(f.frag_set_flags.0, &mut bytes);
                 Self::write_frags(f.frag_id, f.frag_total, &mut bytes);
             },
-            PacketVariant::Ack { seq_id, slice } => {
-                bytes[20..].copy_from_slice(slice.as_ref());
+            PacketVariant::Ack { seq_id, timing, slice } => {
+                bytes[22..].copy_from_slice(slice.as_ref());
+                BigEndian::write_u16(&mut bytes[20..22], timing.to_u16());
                 Self::write_seq_id(*seq_id, &mut bytes);
-                Self::write_flags(0, &mut bytes);
+                Self::write_flags(control_flags, &mut bytes);
                 Self::write_frags(255, 0, &mut bytes);
             },
             PacketVariant::Syn { pub_key } => {
@@ -109,21 +135,39 @@ impl<P: AsRef<[u8]>> Packet<P> {
             },
             PacketVariant::End { last_seq_id } => {
                 Self::write_seq_id(*last_seq_id, &mut bytes);
-                Self::write_flags(0, &mut bytes);
+                Self::write_flags(control_flags, &mut bytes);
                 Self::write_frags(255, 3, &mut bytes);
             },
             PacketVariant::Abort { last_seq_id } => {
                 Self::write_seq_id(*last_seq_id, &mut bytes);
-                Self::write_flags(0, &mut bytes);
+                Self::write_flags(control_flags, &mut bytes);
                 Self::write_frags(255, 4, &mut bytes);
             },
             PacketVariant::Heartbeat => {
-                Self::write_flags(0, &mut bytes);
+                Self::write_flags(control_flags, &mut bytes);
                 Self::write_frags(255, 10, &mut bytes);
             },
         }
         bytes[4..8].copy_from_slice(&self.src_identity);
         bytes[8..12].copy_from_slice(&self.dst_identity);
+        bytes
+    }
+
+    /// The bytes covered by the mac of a control packet: everything except the CRC32 and the mac itself.
+    ///
+    /// Serialization is deterministic, so the sender and the receiver compute the same bytes.
+    pub (crate) fn mac_input(&self) -> Vec<u8> {
+        let mut bytes = self.to_bytes_without_mac(true);
+        bytes.drain(0..PACKET_CRC32_SIZE);
+        bytes
+    }
+
+    pub (crate) fn to_bytes(&self) -> Vec<u8> {
+        let mut bytes = self.to_bytes_without_mac(self.mac.is_some());
+        if let Some(mac) = &self.mac {
+            bytes.extend_from_slice(&mac.counter.to_be_bytes());
+            bytes.extend_from_slice(&mac.tag);
+        }
         let generated_crc: u32 = crc32_hash(&bytes[4..]);
         BigEndian::write_u32(&mut bytes[0..4], generated_crc);
         bytes
@@ -152,13 +196,30 @@ impl<P: AsRef<[u8]>> Packet<P> {
             return Err((UdpDataError::InvalidCrc, bytes));
         }
 
+        // control packets may end with a mac, cut it from the data
+        let is_control = frag_id == 255 && matches!(frag_tot, 0 | 3 | 4 | 10);
+        let (data_slice, mac) = if is_control && frag_flags & CONTROL_FLAG_HAS_MAC != 0 {
+            let Some((data_slice, mac_slice)) = data_slice.split_at_checked(data_slice.len().wrapping_sub(CONTROL_MAC_SIZE)) else {
+                return Err((UdpDataError::NotBigEnough, bytes));
+            };
+            let mac = ControlMac {
+                counter: BigEndian::read_u32(&mac_slice[0..4]),
+                tag: mac_slice[4..].try_into().unwrap(),
+            };
+            (data_slice, Some(mac))
+        } else {
+            (data_slice, None)
+        };
+        let mac_len = if mac.is_some() { CONTROL_MAC_SIZE } else { 0 };
+
         let variant = match (frag_id, frag_tot) {
             (255, 0) => {
-                if data_slice.len() < 4 {
+                if data_slice.len() < 6 {
                     return Err((UdpDataError::NotBigEnough, bytes));
                 }
                 let seq_id = BigEndian::read_u32(&data_slice[0..4]);
-                PacketVariant::Ack { seq_id , slice: OwnedSlice::new(bytes, PACKET_VAR_START_BYTE + 4) }
+                let timing = AckTiming::from_u16(BigEndian::read_u16(&data_slice[4..6]));
+                PacketVariant::Ack { seq_id, timing, slice: OwnedSlice::new_stripped(bytes, PACKET_VAR_START_BYTE + 6, mac_len) }
             },
             (255, 1) => {
                 if data_slice.len() < 32 {
@@ -204,7 +265,8 @@ impl<P: AsRef<[u8]>> Packet<P> {
             }
             (frag_id, frag_total) => return Err((UdpDataError::InvalidFragLayout(frag_id, frag_total), bytes)),
         };
-        let packet = Packet::new(src_id, dst_id, variant);
+        let mut packet = Packet::new(src_id, dst_id, variant);
+        packet.mac = mac;
         Ok(packet)
     }
 
@@ -212,6 +274,7 @@ impl<P: AsRef<[u8]>> Packet<P> {
     pub (crate) fn cmp_with<T2: AsRef<[u8]>>(&self, other: &Packet<T2>) -> bool {
         self.src_identity == other.src_identity &&
         self.dst_identity == other.dst_identity &&
+        self.mac == other.mac &&
         self.packet_variant.cmp_with(&other.packet_variant)
     }
 }
@@ -223,10 +286,11 @@ impl<P: AsRef<[u8]>> PacketVariant<P> {
     pub (crate) fn cmp_with<T2: AsRef<[u8]>>(&self, other: &PacketVariant<T2>) -> bool {
         use self::PacketVariant::*;
         match (self, other) {
-            (Fragment(f1), Fragment(f2)) => 
+            (Fragment(f1), Fragment(f2)) =>
                 f1.seq_id == f2.seq_id && f1.frag_id == f2.frag_id && f1.frag_total == f2.frag_total
                 && f1.data.as_ref() == f2.data.as_ref(),
-            (Ack { seq_id: s1, slice: d1 }, Ack { seq_id: s2, slice: d2 }) => s1 == s2 && d1.as_ref() == d2.as_ref(),
+            (Ack { seq_id: s1, timing: t1, slice: d1 }, Ack { seq_id: s2, timing: t2, slice: d2 }) =>
+                s1 == s2 && t1 == t2 && d1.as_ref() == d2.as_ref(),
             (Syn { pub_key: p1 }, Syn { pub_key: p2 }) => p1.as_ref() == p2.as_ref(),
             (SynAck { pub_key: p1 }, SynAck { pub_key: p2 }) => p1.as_ref() == p2.as_ref(),
             (End { last_seq_id: s1 }, End { last_seq_id: s2 }) => s1 == s2,
@@ -237,7 +301,7 @@ impl<P: AsRef<[u8]>> PacketVariant<P> {
     }
 }
 
-/// UdpBytes represents the raw bytes that we get from a UdpSocket. 
+/// UdpBytes represents the raw bytes that we get from a UdpSocket.
 ///
 /// It must contain a buffer that is AT LEAST
 /// 10 bytes long. The structure for the udp message is as follow:
@@ -247,18 +311,19 @@ impl<P: AsRef<[u8]>> PacketVariant<P> {
 /// [8-11]: first 4 bytes of DH pub key, but for the destination instead. If unknown, send all 0s
 /// [12]: "Frag Id"
 /// [13] "Frag total"
-/// [14-15]: frag set flags; such as "IS_EXPIRE", "IS_KEY", ...
+/// [14-15]: frag set flags; such as "IS_EXPIRE", "IS_KEY", ... For control packets, "HAS_MAC"
 /// [16-19]: sequence id (if applicable).
 /// [rest..]: data (if applicable)
+/// [last 12 bytes]: only for control packets with the "HAS_MAC" flag: the mac (see "Control packets mac")
 ///
-/// For now, there are 6 types of messages: 
+/// For now, there are 6 types of messages:
 /// `Fragment`s, `Ack`s, `Syn`, `SynAck`, `End`, `Abort` and `Heartbeat`.
 ///
 /// # Determine the type of the packet:
 ///
 /// Note that FragTotal+1 represents the number of frags there may be, so it IS possible
 /// to have 0 as a frag_total (1 fragment) and 255 as well (255 fragments).
-/// 
+///
 /// However, it does not make sense if frag_id is greater than frag_total, so some of those
 /// couples are reserved to determine the type of the received (or sent!) packet:
 ///
@@ -274,7 +339,7 @@ impl<P: AsRef<[u8]>> PacketVariant<P> {
 /// * If Frag ID == 255, Frag Total == 10: type = Heartbeat: Message sent every few iterations
 /// to make sure the remote does not disconnect unexpectedly.
 /// * Other uses for Frag ID == 255 and Frag Total != 255 are reserved for other packets like these.
-/// Note that Frag ID == 255 and Frag Total == 255 means 
+/// Note that Frag ID == 255 and Frag Total == 255 means
 ///
 /// A Fragment is a chunk of a message, represented with the structure above.
 ///
@@ -294,11 +359,16 @@ impl<P: AsRef<[u8]>> PacketVariant<P> {
 ///
 /// # Ack
 ///
-/// Payload will contain additional data on top of the header, not defined by the user.
+/// [20-21] are the "ack timing", a BigEndian u16: the highest bit is set if the last fragment received
+/// for this seq_id was a resend, and the 15 other bits are how long the receiver waited between receiving that
+/// fragment and sending this ack, in units of 200µs (all 1s means too long). The sender of the message uses it to
+/// compute the ping without the receiver's delay.
+///
+/// [22..] is additional data, not defined by the user.
 /// This additional data will be at most the size of (Type<FragId>::Max + 1) / 8, meaning
 /// (255 + 1) / 8 = 32 bytes.
-/// 
-/// Hence for a Ack packet, the maximum length will be of 16bytes (header) + 32bytes = 48 bytes.
+///
+/// Hence for a Ack packet, the maximum length will be of 16bytes (header) + 4 + 2 + 32bytes = 54 bytes (+ 12 for the mac).
 ///
 /// Those 32 bytes are filled with binaries (1 or 0), and are used to send which of the frag IDs
 /// have been received.
@@ -312,6 +382,20 @@ impl<P: AsRef<[u8]>> PacketVariant<P> {
 /// The receiver will send 1 of these packets per iteration at *most*, unless the packet is totally received
 /// (all 1s to send), then the packet is sent once per iteration,
 /// for multiple iterations (to make sure the ack goes through).
+///
+/// # Control packets mac
+///
+/// Acks, End, Abort and Heartbeat are "control packets". Once the shared secret is known, they are authenticated,
+/// otherwise anyone knowing the 4 bytes identities (sent in clear) could fake them, to end a connection for instance.
+///
+/// When the flag "HAS_MAC" (0b1) is set, the packet ends with:
+///
+/// [0-3]: a counter, BigEndian u32: number of control packets sent before by this sender
+/// [4-11]: a Poly1305 tag truncated to 8 bytes, of everything in the packet after the CRC32 and before the mac.
+///
+/// The tag is computed with ChaCha20Poly1305, using a key derived from the shared secret (different from the
+/// key of the encrypted messages) and the nonce [counter (LE, 4 bytes)][first 8 bytes of the sender's public key].
+/// (ChaCha20Poly1305 is used in place of a keyed hash like BLAKE3 or HMAC, see `control_tag` in inner.rs.)
 ///
 /// Note that everything is Big Endian encoded (as is the standard for most network protocols)
 pub struct UdpBytes<B: AsRef<[u8]>> {
@@ -446,13 +530,15 @@ fn udp_success_ack_parse() {
         0x00, 0x00, 0x00, 0x00, // pub dst key
         0xFF, 0x00, 0x00, 0x00, // frag id / frag tot / frag flags
         0x00, 0x00, 0x00, 0x05, // seq id
-        0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF // data
+        0xFF, 0xFF, // ack timing: delay too long, after a resend
+        0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF // data
     ];
     let udp_message = UdpBytes::new(received_message_bytes);
     let packet = udp_message.compute_packet().expect("compute packet");
-    if let PacketVariant::Ack { seq_id, slice } = &packet.packet_variant {
+    if let PacketVariant::Ack { seq_id, timing, slice } = &packet.packet_variant {
+        assert_eq!(*timing, AckTiming { delay: None, after_resend: true });
         assert_eq!(*seq_id, 5);
-        assert_eq!(slice.as_ref().len(), 8);
+        assert_eq!(slice.as_ref().len(), 6);
     } else {
         panic!("Received packet was not a fragment ACK");
     }
@@ -524,7 +610,8 @@ fn udp_success_heartbeat_parse() {
 #[test]
 #[cfg(test)]
 fn udp_ser_de_ack() {
-    let ack = PacketVariant::Ack { seq_id: 9, slice: vec![0xAA, 0xAA].into_boxed_slice() };
+    let timing = AckTiming { delay: Some(std::time::Duration::from_millis(3)), after_resend: false };
+    let ack = PacketVariant::Ack { seq_id: 9, timing, slice: vec![0xAA, 0xAA].into_boxed_slice() };
     let packet = Packet::new([0xEE; 4], [0xDD; 4], ack);
     let udp_packet = UdpBytes::from(&packet);
     let parsed = udp_packet.compute_packet().expect("compute packet");
@@ -606,4 +693,41 @@ fn udp_success_frag_conversions() {
     } else {
         panic!("Received message is not of fragment type!")
     }
+}
+#[test]
+#[cfg(test)]
+fn udp_ser_de_control_mac() {
+    let mac = ControlMac { counter: 0xDEADBEEF, tag: [7; CONTROL_MAC_TAG_SIZE] };
+    let timing = AckTiming { delay: Some(std::time::Duration::ZERO), after_resend: false };
+    let variants: Vec<PacketVariant<Box<[u8]>>> = vec![
+        PacketVariant::Ack { seq_id: 9, timing, slice: vec![0xAA, 0xAA].into_boxed_slice() },
+        PacketVariant::Ack { seq_id: 9, timing, slice: vec![].into_boxed_slice() },
+        PacketVariant::End { last_seq_id: 3 },
+        PacketVariant::Abort { last_seq_id: 3 },
+        PacketVariant::Heartbeat,
+    ];
+    for variant in variants {
+        let mut packet = Packet::new([0xEE; 4], [0xDD; 4], variant);
+        packet.mac = Some(mac);
+        let bytes = packet.to_bytes();
+        // the mac input is the packet without its crc and mac
+        assert_eq!(packet.mac_input(), &bytes[PACKET_CRC32_SIZE..bytes.len() - CONTROL_MAC_SIZE]);
+        let parsed = UdpBytes::new(bytes.into_boxed_slice()).compute_packet().expect("compute packet");
+        assert!(packet.cmp_with(&parsed), "{:?} != {:?}", packet, parsed);
+        assert_eq!(parsed.mac_input(), packet.mac_input());
+    }
+}
+
+#[test]
+#[cfg(test)]
+fn udp_control_mac_too_short() {
+    // HAS_MAC flag set on a heartbeat, but no room for the mac
+    let mut bytes = vec![0u8; 16 + CONTROL_MAC_SIZE - 1];
+    bytes[12] = 0xFF;
+    bytes[13] = 10;
+    bytes[15] = 1;
+    let crc = crc32_hash(&bytes[4..]);
+    BigEndian::write_u32(&mut bytes[0..4], crc);
+    let e = UdpBytes::new(bytes.into_boxed_slice()).compute_packet().expect_err("compute packet error");
+    assert_eq!(e.0, UdpDataError::NotBigEnough);
 }

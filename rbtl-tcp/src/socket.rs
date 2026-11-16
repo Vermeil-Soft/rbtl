@@ -1,4 +1,5 @@
 use byteorder::{BigEndian, ByteOrder};
+use rbtl_core::utils::PingTracker;
 
 use std::{
     collections::VecDeque,
@@ -9,7 +10,7 @@ use std::{
 };
 
 use crate::{
-    SeqId, ingester::{Ingester, IngesterResult}, Error, ping_tracker::PingTracker,
+    SeqId, ingester::{Ingester, IngesterResult}, Error,
     darkmagic::SyncUnsafeCell
 };
 
